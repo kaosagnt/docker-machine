@@ -1,0 +1,19 @@
+image: gitlab/dind
+
+variables:
+  USE_CONTAINER: "true"
+
+before_script:
+- apt-get update -yqqq
+- apt-get install -yqqq make
+
+build:
+  stage: build
+  script:
+  - make build
+  artifacts:
+    paths:
+    - bin/
+  tags:
+  - docker
+  - privileged
