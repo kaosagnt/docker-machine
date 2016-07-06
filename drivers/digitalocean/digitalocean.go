@@ -225,16 +225,28 @@ func (d *Driver) Create() error {
 		SSHKeys:           []godo.DropletCreateSSHKey{{ID: d.SSHKeyID}},
 	}
 
-	newDroplet, _, err := client.Droplets.Create(createRequest)
-	if err != nil {
-		return err
+	var newDroplet *godo.Droplet
+	var resp *godo.Response
+
+	for {
+		newDroplet, resp, err = client.Droplets.Create(createRequest)
+		if d.rateLimit(resp) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		break
 	}
 
 	d.DropletID = newDroplet.ID
 
 	log.Info("Waiting for IP address to be assigned to the Droplet...")
 	for {
-		newDroplet, _, err = client.Droplets.Get(d.DropletID)
+		newDroplet, resp, err = client.Droplets.Get(d.DropletID)
+		if d.rateLimit(resp) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -248,7 +260,7 @@ func (d *Driver) Create() error {
 			break
 		}
 
-		time.Sleep(1 * time.Second)
+		time.Sleep(time.Second(2 + rand.Intn(8)))
 	}
 
 	log.Debugf("Created droplet ID %d, IP address %s",
@@ -262,9 +274,16 @@ func (d *Driver) createSSHKey() (*godo.Key, error) {
 	d.SSHKeyPath = d.GetSSHKeyPath()
 
 	if d.SSHKeyFingerprint != "" {
-		key, resp, err := d.getClient().Keys.GetByFingerprint(d.SSHKeyFingerprint)
-		if err != nil && resp.StatusCode == 404 {
-			return nil, fmt.Errorf("Digital Ocean SSH key with fingerprint %s doesn't exist", d.SSHKeyFingerprint)
+		var key *godo.Key
+		for {
+			key, resp, err := d.getClient().Keys.GetByFingerprint(d.SSHKeyFingerprint)
+			if d.rateLimit(resp) {
+				continue
+			}
+			if err != nil && resp.StatusCode == 404 {
+				return nil, fmt.Errorf("Digital Ocean SSH key with fingerprint %s doesn't exist", d.SSHKeyFingerprint)
+			}
+			return key, err
 		}
 
 		if d.SSHKey == "" {
@@ -292,12 +311,17 @@ func (d *Driver) createSSHKey() (*godo.Key, error) {
 		PublicKey: string(publicKey),
 	}
 
-	key, _, err := d.getClient().Keys.Create(createRequest)
-	if err != nil {
-		return key, err
-	}
+	for {
+		key, resp, err := d.getClient().Keys.Create(createRequest)
+		if d.rateLimit(resp) {
+			continue
+		}
+		if err != nil {
+			return key, err
+		}
 
-	return key, nil
+		return key, nil
+	}
 }
 
 func (d *Driver) GetURL() (string, error) {
@@ -314,19 +338,25 @@ func (d *Driver) GetURL() (string, error) {
 }
 
 func (d *Driver) GetState() (state.State, error) {
-	droplet, _, err := d.getClient().Droplets.Get(d.DropletID)
-	if err != nil {
-		return state.Error, err
+	for {
+		droplet, resp, err := d.getClient().Droplets.Get(d.DropletID)
+		if d.isRateLimited(resp) {
+			time.Sleep(time.Second)
+			continue
+		}
+		if err != nil {
+			return state.Error, err
+		}
+		switch droplet.Status {
+		case "new":
+			return state.Starting, nil
+		case "active":
+			return state.Running, nil
+		case "off":
+			return state.Stopped, nil
+		}
+		return state.None, nil
 	}
-	switch droplet.Status {
-	case "new":
-		return state.Starting, nil
-	case "active":
-		return state.Running, nil
-	case "off":
-		return state.Stopped, nil
-	}
-	return state.None, nil
 }
 
 func (d *Driver) Start() error {
@@ -376,6 +406,22 @@ func (d *Driver) getClient() *godo.Client {
 	client := oauth2.NewClient(oauth2.NoContext, tokenSource)
 
 	return godo.NewClient(client)
+}
+
+func (d *Driver) isRateLimited(resp *godo.Response) {
+	if resp != nil && resp.StatusCode == 429 {
+		return true
+	}
+	return false
+}
+
+func (d *Driver) rateLimit(resp *godo.Response) bool {
+	if d.isRateLimited(resp) {
+		log.Infof("Rate limit detected...")
+		time.Sleep(time.Second(5 + rand.Intn(5)))
+		return true
+	}
+	return false
 }
 
 func (d *Driver) GetSSHKeyPath() string {
