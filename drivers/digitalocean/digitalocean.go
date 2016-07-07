@@ -477,24 +477,41 @@ func (d *Driver) isRateLimited(resp *godo.Response) bool {
 	return false
 }
 
-func (d *Driver) limitRate(resp *godo.Response, create ...bool) bool {
+func (d *Driver) limitRate(resp *godo.Response, isStatus ...bool) bool {
 	if !d.RetryOnRateLimit {
 		return false
 	}
 	if d.isRateLimited(resp) {
-		if len(create) > 0 || create[0] {
-			d.sleep(1, 2)
-		} else {
-			log.Infof("Rate limit detected...")
-			d.sleep(5, 5)
+		var wait, deviation time.Duration
+
+		// Calculate minimum time to wait, based on Reset
+		if reset := resp.Rate.Reset.Sub(time.Now()); reset > 0 {
+			wait += reset
 		}
+
+		if len(isStatus) > 0 && isStatus[0] {
+			// For status check, use short intervals
+			if wait < time.Second {
+				wait = time.Second
+			}
+			deviation += 2 * time.Second
+		} else {
+			// For creations use long intervals
+			if wait < 5 * time.Second {
+				wait = 5 * time.Second
+			}
+			deviation += 5 * time.Second
+			log.Infof("Rate limit detected (waiting at least %v)...", wait)
+		}
+
+		d.sleep(wait, deviation)
 		return true
 	}
 	return false
 }
 
-func (d *Driver) sleep(base, n int) {
-	time.Sleep(time.Second * time.Duration(base+rand.Intn(n)))
+func (d *Driver) sleep(base, n time.Duration) {
+	time.Sleep(base + time.Duration(rand.Int63n(int64(n))))
 }
 
 func (d *Driver) GetSSHKeyPath() string {
