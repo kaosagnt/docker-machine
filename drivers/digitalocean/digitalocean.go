@@ -186,7 +186,7 @@ func (d *Driver) PreCreateCheck() error {
 
 	client := d.getClient()
 	for {
-		log.Infof("DO_API: Region List")
+		log.Debugf("DO_API: Region List")
 		regions, resp, err := client.Regions.List(nil)
 		if d.limitRate(resp) {
 			continue
@@ -250,7 +250,7 @@ func (d *Driver) Create() (err error) {
 	var resp *godo.Response
 
 	for {
-		log.Infof("DO_API: Create Droplet")
+		log.Debugf("DO_API: Create Droplet")
 		newDroplet, resp, err = client.Droplets.Create(createRequest)
 		if d.limitRate(resp) {
 			continue
@@ -269,7 +269,7 @@ func (d *Driver) Create() (err error) {
 
 	log.Info("Waiting for IP address to be assigned to the Droplet...")
 	for {
-		log.Infof("DO_API: Get Droplet")
+		log.Debugf("DO_API: Get Droplet")
 		newDroplet, resp, err = client.Droplets.Get(d.DropletID)
 		if d.limitRate(resp) {
 			continue
@@ -311,7 +311,7 @@ func (d *Driver) createSSHKey() (*godo.Key, error) {
 	if d.SSHKeyFingerprint != "" {
 		var key *godo.Key
 		for {
-			log.Infof("DO_API: Keys GetByFingerprint")
+			log.Debugf("DO_API: Keys GetByFingerprint")
 			key, resp, err := d.getClient().Keys.GetByFingerprint(d.SSHKeyFingerprint)
 			if d.limitRate(resp) {
 				continue
@@ -348,7 +348,7 @@ func (d *Driver) createSSHKey() (*godo.Key, error) {
 	}
 
 	for {
-		log.Infof("DO_API: Keys Create")
+		log.Debugf("DO_API: Keys Create")
 		key, resp, err := d.getClient().Keys.Create(createRequest)
 		if d.limitRate(resp) {
 			continue
@@ -375,7 +375,7 @@ func (d *Driver) GetURL() (string, error) {
 
 func (d *Driver) GetState() (state.State, error) {
 	for {
-		log.Infof("DO_API: Droplets Get")
+		log.Debugf("DO_API: Droplets Get")
 		droplet, resp, err := d.getClient().Droplets.Get(d.DropletID)
 		if d.limitRate(resp, true) {
 			continue
@@ -395,7 +395,7 @@ func (d *Driver) GetState() (state.State, error) {
 }
 
 func (d *Driver) Start() error {
-	log.Infof("DO_API: DropletActions PowerOn")
+	log.Debugf("DO_API: DropletActions PowerOn")
 	for {
 		_, resp, err := d.getClient().DropletActions.PowerOn(d.DropletID)
 		if d.limitRate(resp) {
@@ -406,7 +406,7 @@ func (d *Driver) Start() error {
 }
 
 func (d *Driver) Stop() error {
-	log.Infof("DO_API: DropletActions Shutdown")
+	log.Debugf("DO_API: DropletActions Shutdown")
 	for {
 		_, resp, err := d.getClient().DropletActions.Shutdown(d.DropletID)
 		if d.limitRate(resp) {
@@ -417,7 +417,7 @@ func (d *Driver) Stop() error {
 }
 
 func (d *Driver) Restart() error {
-	log.Infof("DO_API: DropletActions Reboot")
+	log.Debugf("DO_API: DropletActions Reboot")
 	for {
 		_, resp, err := d.getClient().DropletActions.Reboot(d.DropletID)
 		if d.limitRate(resp) {
@@ -428,7 +428,7 @@ func (d *Driver) Restart() error {
 }
 
 func (d *Driver) Kill() error {
-	log.Infof("DO_API: DropletActions PowerOff")
+	log.Debugf("DO_API: DropletActions PowerOff")
 	for {
 		_, resp, err := d.getClient().DropletActions.PowerOff(d.DropletID)
 		if d.limitRate(resp) {
@@ -442,7 +442,7 @@ func (d *Driver) Remove() error {
 	client := d.getClient()
 	if d.SSHKeyFingerprint == "" {
 		for {
-			log.Infof("DO_API: Keys DeleteByID")
+			log.Debugf("DO_API: Keys DeleteByID")
 			resp, err := client.Keys.DeleteByID(d.SSHKeyID)
 			if err == nil {
 				break
@@ -456,7 +456,7 @@ func (d *Driver) Remove() error {
 			}
 		}
 	}
-	log.Infof("DO_API: Droplets Delete")
+	log.Debugf("DO_API: Droplets Delete")
 	if resp, err := client.Droplets.Delete(d.DropletID); err != nil {
 		if resp.StatusCode == 404 {
 			log.Infof("Digital Ocean droplet doesn't exist, assuming it is already deleted")
