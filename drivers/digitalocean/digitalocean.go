@@ -3,6 +3,7 @@ package digitalocean
 import (
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"net"
 	"os"
 	"path"
@@ -32,6 +33,7 @@ type Driver struct {
 	IPv6              bool
 	Backups           bool
 	PrivateNetworking bool
+	RetryOnRateLimit  bool
 	UserDataFile      string
 }
 
@@ -112,6 +114,11 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Name:   "digitalocean-userdata",
 			Usage:  "path to file with cloud-init user-data",
 		},
+		mcnflag.BoolFlag{
+			EnvVar: "DIGITALOCEAN_RETRY_ON_RATE_LIMIT",
+			Name:   "digitalocean-retry-on-rate-limit",
+			Usage:  "retry all operations if the rate limit is hit",
+		},
 	}
 }
 
@@ -149,6 +156,7 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.SSHPort = flags.Int("digitalocean-ssh-port")
 	d.SSHKeyFingerprint = flags.String("digitalocean-ssh-key-fingerprint")
 	d.SSHKey = flags.String("digitalocean-ssh-key-path")
+	d.RetryOnRateLimit = flags.Bool("digitalocean-retry-on-rate-limit")
 
 	d.SetSwarmConfigFromFlags(flags)
 
@@ -177,6 +185,7 @@ func (d *Driver) PreCreateCheck() error {
 	}
 
 	client := d.getClient()
+	log.Debugf("DO_API: Region List")
 	regions, _, err := client.Regions.List(nil)
 	if err != nil {
 		return err
@@ -190,7 +199,7 @@ func (d *Driver) PreCreateCheck() error {
 	return fmt.Errorf("digitalocean requires a valid region")
 }
 
-func (d *Driver) Create() error {
+func (d *Driver) Create() (err error) {
 	var userdata string
 	if d.UserDataFile != "" {
 		buf, err := ioutil.ReadFile(d.UserDataFile)
@@ -208,6 +217,13 @@ func (d *Driver) Create() error {
 	}
 
 	d.SSHKeyID = key.ID
+
+	defer func() {
+		if err != nil {
+			log.Infof("Droplet creation failed on Digital Ocean, removing...")
+			d.Remove()
+		}
+	}()
 
 	log.Infof("Creating Digital Ocean droplet...")
 
@@ -229,27 +245,33 @@ func (d *Driver) Create() error {
 	var resp *godo.Response
 
 	for {
+		log.Debugf("DO_API: Create Droplet")
 		newDroplet, resp, err = client.Droplets.Create(createRequest)
-		if d.rateLimit(resp) {
+		if d.limitRate(resp) {
 			continue
-		}
-		if err != nil {
+		} else if err != nil {
 			return err
+		} else {
+			break
 		}
-		break
 	}
 
 	d.DropletID = newDroplet.ID
+	try := 0
+
+	// On average it taks at least 5 seconds for assigning IP address
+	time.Sleep(5 * time.Second)
 
 	log.Info("Waiting for IP address to be assigned to the Droplet...")
 	for {
+		log.Debugf("DO_API: Get Droplet")
 		newDroplet, resp, err = client.Droplets.Get(d.DropletID)
-		if d.rateLimit(resp) {
+		if d.limitRate(resp) {
 			continue
-		}
-		if err != nil {
+		} else if err != nil {
 			return err
 		}
+
 		for _, network := range newDroplet.Networks.V4 {
 			if network.Type == "public" {
 				d.IPAddress = network.IPAddress
@@ -260,12 +282,20 @@ func (d *Driver) Create() error {
 			break
 		}
 
-		time.Sleep(time.Second(2 + rand.Intn(8)))
+		if try >= 60 {
+			return fmt.Errorf("too many tries (%d)", try)
+		}
+		try += 1
+
+		d.sleep(2, 8)
 	}
 
-	log.Debugf("Created droplet ID %d, IP address %s",
+	log.Infof("Created droplet ID %d, IP address %s",
 		newDroplet.ID,
 		d.IPAddress)
+
+	// On average it takes at least 30 seconds for machine creation
+	time.Sleep(30 * time.Second)
 
 	return nil
 }
@@ -276,14 +306,15 @@ func (d *Driver) createSSHKey() (*godo.Key, error) {
 	if d.SSHKeyFingerprint != "" {
 		var key *godo.Key
 		for {
+			log.Debugf("DO_API: Keys GetByFingerprint")
 			key, resp, err := d.getClient().Keys.GetByFingerprint(d.SSHKeyFingerprint)
-			if d.rateLimit(resp) {
+			if d.limitRate(resp) {
 				continue
-			}
-			if err != nil && resp.StatusCode == 404 {
+			} else if err != nil && resp.StatusCode == 404 {
 				return nil, fmt.Errorf("Digital Ocean SSH key with fingerprint %s doesn't exist", d.SSHKeyFingerprint)
+			} else {
+				return key, err
 			}
-			return key, err
 		}
 
 		if d.SSHKey == "" {
@@ -312,15 +343,15 @@ func (d *Driver) createSSHKey() (*godo.Key, error) {
 	}
 
 	for {
+		log.Debugf("DO_API: Keys Create")
 		key, resp, err := d.getClient().Keys.Create(createRequest)
-		if d.rateLimit(resp) {
+		if d.limitRate(resp) {
 			continue
-		}
-		if err != nil {
+		} else if err != nil {
 			return key, err
+		} else {
+			return key, nil
 		}
-
-		return key, nil
 	}
 }
 
@@ -339,12 +370,11 @@ func (d *Driver) GetURL() (string, error) {
 
 func (d *Driver) GetState() (state.State, error) {
 	for {
+		log.Debugf("DO_API: Droplets Get")
 		droplet, resp, err := d.getClient().Droplets.Get(d.DropletID)
-		if d.isRateLimited(resp) {
-			time.Sleep(time.Second)
+		if d.limitRate(resp, true) {
 			continue
-		}
-		if err != nil {
+		} else if err != nil {
 			return state.Error, err
 		}
 		switch droplet.Status {
@@ -360,36 +390,68 @@ func (d *Driver) GetState() (state.State, error) {
 }
 
 func (d *Driver) Start() error {
-	_, _, err := d.getClient().DropletActions.PowerOn(d.DropletID)
-	return err
+	log.Debugf("DO_API: DropletActions PowerOn")
+	for {
+		_, resp, err := d.getClient().DropletActions.PowerOn(d.DropletID)
+		if d.limitRate(resp) {
+			continue
+		}
+		return err
+	}
 }
 
 func (d *Driver) Stop() error {
-	_, _, err := d.getClient().DropletActions.Shutdown(d.DropletID)
-	return err
+	log.Debugf("DO_API: DropletActions Shutdown")
+	for {
+		_, resp, err := d.getClient().DropletActions.Shutdown(d.DropletID)
+		if d.limitRate(resp) {
+			continue
+		}
+		return err
+	}
 }
 
 func (d *Driver) Restart() error {
-	_, _, err := d.getClient().DropletActions.Reboot(d.DropletID)
-	return err
+	log.Debugf("DO_API: DropletActions Reboot")
+	for {
+		_, resp, err := d.getClient().DropletActions.Reboot(d.DropletID)
+		if d.limitRate(resp) {
+			continue
+		}
+		return err
+	}
 }
 
 func (d *Driver) Kill() error {
-	_, _, err := d.getClient().DropletActions.PowerOff(d.DropletID)
-	return err
+	log.Debugf("DO_API: DropletActions PowerOff")
+	for {
+		_, resp, err := d.getClient().DropletActions.PowerOff(d.DropletID)
+		if d.limitRate(resp) {
+			continue
+		}
+		return err
+	}
 }
 
 func (d *Driver) Remove() error {
 	client := d.getClient()
 	if d.SSHKeyFingerprint == "" {
-		if resp, err := client.Keys.DeleteByID(d.SSHKeyID); err != nil {
-			if resp.StatusCode == 404 {
+		for {
+			log.Debugf("DO_API: Keys DeleteByID")
+			resp, err := client.Keys.DeleteByID(d.SSHKeyID)
+			if err == nil {
+				break
+			} else if d.limitRate(resp) {
+				continue
+			} else if resp.StatusCode == 404 {
 				log.Infof("Digital Ocean SSH key doesn't exist, assuming it is already deleted")
+				break
 			} else {
 				return err
 			}
 		}
 	}
+	log.Debugf("DO_API: Droplets Delete")
 	if resp, err := client.Droplets.Delete(d.DropletID); err != nil {
 		if resp.StatusCode == 404 {
 			log.Infof("Digital Ocean droplet doesn't exist, assuming it is already deleted")
@@ -408,20 +470,31 @@ func (d *Driver) getClient() *godo.Client {
 	return godo.NewClient(client)
 }
 
-func (d *Driver) isRateLimited(resp *godo.Response) {
+func (d *Driver) isRateLimited(resp *godo.Response) bool {
 	if resp != nil && resp.StatusCode == 429 {
 		return true
 	}
 	return false
 }
 
-func (d *Driver) rateLimit(resp *godo.Response) bool {
+func (d *Driver) limitRate(resp *godo.Response, create ...bool) bool {
+	if !d.RetryOnRateLimit {
+		return false
+	}
 	if d.isRateLimited(resp) {
-		log.Infof("Rate limit detected...")
-		time.Sleep(time.Second(5 + rand.Intn(5)))
+		if len(create) > 0 || create[0] {
+			d.sleep(1, 2)
+		} else {
+			log.Infof("Rate limit detected...")
+			d.sleep(5, 5)
+		}
 		return true
 	}
 	return false
+}
+
+func (d *Driver) sleep(base, n int) {
+	time.Sleep(time.Second * time.Duration(base+rand.Intn(n)))
 }
 
 func (d *Driver) GetSSHKeyPath() string {
