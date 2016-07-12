@@ -442,7 +442,7 @@ func (d *Driver) Remove() error {
 				break
 			} else if d.limitRate(resp) {
 				continue
-			} else if resp.StatusCode == 404 {
+			} else if resp != nil && resp.StatusCode == 404 {
 				log.Infof("Digital Ocean SSH key doesn't exist, assuming it is already deleted")
 				break
 			} else {
@@ -452,7 +452,7 @@ func (d *Driver) Remove() error {
 	}
 	log.Debugf("DO_API: Droplets Delete")
 	if resp, err := client.Droplets.Delete(d.DropletID); err != nil {
-		if resp.StatusCode == 404 {
+		if resp != nil && resp.StatusCode == 404 {
 			log.Infof("Digital Ocean droplet doesn't exist, assuming it is already deleted")
 		} else {
 			return err
