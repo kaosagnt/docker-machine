@@ -7,7 +7,7 @@ import (
 
 var (
 	// Version should be updated by hand at each release
-	Version = "0.9.0-gitlab.1"
+	Version = "0.10.0-gitlab.1"
 
 	// GitCommit will be overwritten automatically by the build system
 	GitCommit = "HEAD"
