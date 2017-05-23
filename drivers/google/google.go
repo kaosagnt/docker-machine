@@ -340,7 +340,7 @@ func (d *Driver) Start() error {
 
 	instance, err := c.instance()
 	if err != nil {
-		if !strings.Contains(err.Error(), "notFound") {
+		if !isNotFound(err) {
 			return err
 		}
 	}
@@ -395,9 +395,13 @@ func (d *Driver) Remove() error {
 		return err
 	}
 
-	if err := c.deleteInstance(); err != nil {
+	if err := c.deleteInstance(); err != nil && !isNotFound(err) {
 		return err
 	}
 
-	return c.deleteDisk()
+	if err := c.deleteDisk(); err != nil && !isNotFound(err) {
+		return err
+	}
+
+	return nil
 }
