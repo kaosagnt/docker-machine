@@ -471,6 +471,7 @@ func (d *Driver) Remove() error {
 			continue
 		} else if resp != nil && resp.StatusCode == 404 {
 			log.Infof("Digital Ocean droplet doesn't exist, assuming it is already deleted")
+			break
 		} else {
 			return err
 		}
