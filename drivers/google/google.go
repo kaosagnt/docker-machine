@@ -40,6 +40,7 @@ type Driver struct {
 	*drivers.BaseDriver
 	Zone              string
 	MachineType       string
+	MinCPUPlatform    string
 	MachineImage      string
 	DiskType          string
 	Address           string
@@ -59,15 +60,16 @@ type Driver struct {
 }
 
 const (
-	defaultZone        = "us-central1-a"
-	defaultUser        = "docker-user"
-	defaultMachineType = "n1-standard-1"
-	defaultImageName   = "ubuntu-os-cloud/global/images/ubuntu-1604-xenial-v20170721"
-	defaultScopes      = "https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
-	defaultDiskType    = "pd-standard"
-	defaultDiskSize    = 10
-	defaultNetwork     = "default"
-	defaultSubnetwork  = ""
+	defaultZone           = "us-central1-a"
+	defaultUser           = "docker-user"
+	defaultMachineType    = "n1-standard-1"
+	defaultImageName      = "ubuntu-os-cloud/global/images/ubuntu-1604-xenial-v20170721"
+	defaultScopes         = "https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
+	defaultDiskType       = "pd-standard"
+	defaultDiskSize       = 10
+	defaultNetwork        = "default"
+	defaultSubnetwork     = ""
+	defaultMinCPUPlatform = ""
 
 	defaultGoogleOperationBackoffInitialInterval     = 1
 	defaultGoogleOperationBackoffRandomizationFactor = "0.5"
@@ -91,6 +93,12 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "GCE Machine Type",
 			Value:  defaultMachineType,
 			EnvVar: "GOOGLE_MACHINE_TYPE",
+		},
+		mcnflag.StringFlag{
+			Name:   "google-min-cpu-platform",
+			Usage:  "Minimal CPU Platform for created VM (use friendly name e.g. 'Intel Sandy Bridge')",
+			EnvVar: "GOOGLE_MIN_CPU_PLATFORM",
+			Value:  defaultMinCPUPlatform,
 		},
 		mcnflag.StringFlag{
 			Name:   "google-machine-image",
@@ -205,14 +213,15 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 // NewDriver creates a Driver with the specified storePath.
 func NewDriver(machineName string, storePath string) *Driver {
 	return &Driver{
-		Zone:         defaultZone,
-		DiskType:     defaultDiskType,
-		DiskSize:     defaultDiskSize,
-		MachineType:  defaultMachineType,
-		MachineImage: defaultImageName,
-		Network:      defaultNetwork,
-		Subnetwork:   defaultSubnetwork,
-		Scopes:       defaultScopes,
+		Zone:           defaultZone,
+		DiskType:       defaultDiskType,
+		DiskSize:       defaultDiskSize,
+		MachineType:    defaultMachineType,
+		MinCPUPlatform: defaultMinCPUPlatform,
+		MachineImage:   defaultImageName,
+		Network:        defaultNetwork,
+		Subnetwork:     defaultSubnetwork,
+		Scopes:         defaultScopes,
 		BaseDriver: &drivers.BaseDriver{
 			SSHUser:     defaultUser,
 			MachineName: machineName,
@@ -250,6 +259,7 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.UseExisting = flags.Bool("google-use-existing")
 	if !d.UseExisting {
 		d.MachineType = flags.String("google-machine-type")
+		d.MinCPUPlatform = flags.String("google-min-cpu-platform")
 		d.MachineImage = flags.String("google-machine-image")
 		d.MachineImage = strings.TrimPrefix(d.MachineImage, "https://www.googleapis.com/compute/v1/projects/")
 		d.DiskSize = flags.Int("google-disk-size")
