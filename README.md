@@ -1,5 +1,16 @@
 # ⚠️This is a fork of Docker Machine ⚠
 
+# Toolbox2docker
+
+This is a fork of a fork...
+
+This is a fork of Docker Machine maintained for [Toolbox2docker](https://github.com/kaosagnt/toolbox2docker).
+It brings in other fixes and changes on top of the GitLab fork.
+
+The boot2docker Github API URL has been changed to point to the [boot2docker-xfs-ng](https://github.com/kaosagnt/boot2docker-xfs-ng) ISO files.
+
+# GitLab
+
 This is a fork of Docker Machine maintained by GitLab for [fixing critical bugs](https://docs.gitlab.com/runner/executors/docker_machine.html#forked-version-of-docker-machine).
 
 For a new merge request to be considered, the following questions must be answered:
