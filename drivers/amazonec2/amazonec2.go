@@ -621,6 +621,41 @@ func (d *Driver) Create() error {
 func (d *Driver) innerCreate() error {
 	log.Infof("Launching instance...")
 
+	// Prepare Tags
+	tags := []*ec2.Tag{}
+	tags = append(tags, &ec2.Tag{
+		Key:   aws.String("Name"),
+		Value: &d.MachineName,
+	})
+
+	if d.Tags != "" {
+		t := strings.Split(d.Tags, ",")
+		if len(t) > 0 && len(t)%2 != 0 {
+			log.Warnf("Tags are not key value in pairs. %d elements found", len(t))
+		}
+		for i := 0; i < len(t)-1; i += 2 {
+			tags = append(tags, &ec2.Tag{
+				Key:   &t[i],
+				Value: &t[i+1],
+			})
+		}
+	}
+
+	tagSpecifications := []*ec2.TagSpecification{
+		{
+			ResourceType: aws.String("instance"),
+			Tags: tags,
+		},
+		{
+			ResourceType: aws.String("volume"),
+			Tags: tags,
+		},
+		{
+			ResourceType: aws.String("network-interface"),
+			Tags: tags,
+		},
+	}
+
 	if err := d.createKeyPair(); err != nil {
 		return fmt.Errorf("unable to create key pair: %s", err)
 	}
@@ -658,6 +693,7 @@ func (d *Driver) innerCreate() error {
 
 	if d.RequestSpotInstance {
 		req := ec2.RequestSpotInstancesInput{
+			TagSpecifications: tagSpecifications,
 			LaunchSpecification: &ec2.RequestSpotLaunchSpecification{
 				ImageId: &d.AMI,
 				Placement: &ec2.SpotPlacement{
@@ -747,6 +783,7 @@ func (d *Driver) innerCreate() error {
 		}
 	} else {
 		inst, err := d.getClient().RunInstances(&ec2.RunInstancesInput{
+			TagSpecifications: tagSpecifications,
 			ImageId:  &d.AMI,
 			MinCount: aws.Int64(1),
 			MaxCount: aws.Int64(1),
@@ -796,13 +833,6 @@ func (d *Driver) innerCreate() error {
 		d.IPAddress,
 		d.PrivateIPAddress,
 	)
-
-	log.Debug("Settings tags for instance")
-	err := d.configureTags(d.Tags)
-
-	if err != nil {
-		return fmt.Errorf("Unable to tag instance %s: %s", d.InstanceId, err)
-	}
 
 	return nil
 }
@@ -1102,39 +1132,6 @@ func (d *Driver) securityGroupAvailableFunc(id string) func() bool {
 		log.Debug(err)
 		return false
 	}
-}
-
-func (d *Driver) configureTags(tagGroups string) error {
-
-	tags := []*ec2.Tag{}
-	tags = append(tags, &ec2.Tag{
-		Key:   aws.String("Name"),
-		Value: &d.MachineName,
-	})
-
-	if tagGroups != "" {
-		t := strings.Split(tagGroups, ",")
-		if len(t) > 0 && len(t)%2 != 0 {
-			log.Warnf("Tags are not key value in pairs. %d elements found", len(t))
-		}
-		for i := 0; i < len(t)-1; i += 2 {
-			tags = append(tags, &ec2.Tag{
-				Key:   &t[i],
-				Value: &t[i+1],
-			})
-		}
-	}
-
-	_, err := d.getClient().CreateTags(&ec2.CreateTagsInput{
-		Resources: d.getTagResources(),
-		Tags:      tags,
-	})
-
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (d *Driver) getTagResources() []*string {
