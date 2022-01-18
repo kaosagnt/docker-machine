@@ -460,7 +460,7 @@ func (c *ComputeUtil) uploadSSHKey(instance *raw.Instance, sshKeyPath string) er
 
 	metadata := instance.Metadata
 	metadata.Items = append(metadata.Items, &raw.MetadataItems{
-		Key:   "sshKeys",
+		Key:   "ssh-keys",
 		Value: &metaDataValue,
 	})
 

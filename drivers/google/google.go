@@ -70,9 +70,9 @@ type Driver struct {
 
 const (
 	defaultZone              = "us-central1-a"
-	defaultUser              = "docker-user"
+	defaultUser              = "ubuntu"
 	defaultMachineType       = "n1-standard-1"
-	defaultImageName         = "ubuntu-os-cloud/global/images/ubuntu-1604-xenial-v20170721"
+	defaultImageName         = "ubuntu-os-cloud/global/images/ubuntu-1604-xenial-v20210928"
 	defaultServiceAccount    = "default"
 	defaultScopes            = "https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
 	defaultDiskType          = "pd-standard"
