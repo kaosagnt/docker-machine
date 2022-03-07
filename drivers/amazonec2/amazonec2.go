@@ -621,40 +621,7 @@ func (d *Driver) Create() error {
 func (d *Driver) innerCreate() error {
 	log.Infof("Launching instance...")
 
-	// Prepare Tags
-	tags := []*ec2.Tag{}
-	tags = append(tags, &ec2.Tag{
-		Key:   aws.String("Name"),
-		Value: &d.MachineName,
-	})
-
-	if d.Tags != "" {
-		t := strings.Split(d.Tags, ",")
-		if len(t) > 0 && len(t)%2 != 0 {
-			log.Warnf("Tags are not key value in pairs. %d elements found", len(t))
-		}
-		for i := 0; i < len(t)-1; i += 2 {
-			tags = append(tags, &ec2.Tag{
-				Key:   &t[i],
-				Value: &t[i+1],
-			})
-		}
-	}
-
-	tagSpecifications := []*ec2.TagSpecification{
-		{
-			ResourceType: aws.String("instance"),
-			Tags: tags,
-		},
-		{
-			ResourceType: aws.String("volume"),
-			Tags: tags,
-		},
-		{
-			ResourceType: aws.String("network-interface"),
-			Tags: tags,
-		},
-	}
+	tagSpecifications := d.createTagSpecifications()
 
 	if err := d.createKeyPair(); err != nil {
 		return fmt.Errorf("unable to create key pair: %s", err)
@@ -784,10 +751,10 @@ func (d *Driver) innerCreate() error {
 	} else {
 		inst, err := d.getClient().RunInstances(&ec2.RunInstancesInput{
 			TagSpecifications: tagSpecifications,
-			ImageId:  &d.AMI,
-			MinCount: aws.Int64(1),
-			MaxCount: aws.Int64(1),
-			Placement: &ec2.Placement{
+			ImageId:           &d.AMI,
+			MinCount:          aws.Int64(1),
+			MaxCount:          aws.Int64(1),
+			Placement:         &ec2.Placement{
 				AvailabilityZone: &regionZone,
 			},
 			KeyName:           &d.KeyName,
@@ -1133,6 +1100,44 @@ func (d *Driver) securityGroupAvailableFunc(id string) func() bool {
 		return false
 	}
 }
+
+func (d *Driver) createTagSpecifications() []*ec2.TagSpecification {
+	var tags []*ec2.Tag
+	tags = append(tags, &ec2.Tag{
+		Key:   aws.String("Name"),
+		Value: &d.MachineName,
+	})
+
+	if d.Tags != "" {
+		t := strings.Split(d.Tags, ",")
+		if len(t) > 0 && len(t)%2 != 0 {
+			log.Warnf("Tags are not key value in pairs. %d elements found", len(t))
+		}
+		for i := 0; i < len(t)-1; i += 2 {
+			tags = append(tags, &ec2.Tag{
+				Key:   &t[i],
+				Value: &t[i+1],
+			})
+		}
+	}
+
+	return []*ec2.TagSpecification{
+		{
+			ResourceType: aws.String("instance"),
+			Tags:         tags,
+		},
+		{
+			ResourceType: aws.String("volume"),
+			Tags:         tags,
+		},
+		{
+			ResourceType: aws.String("network-interface"),
+			Tags:         tags,
+		},
+	}
+}
+
+
 
 func (d *Driver) getTagResources() []*string {
 	resources := []*string{&d.InstanceId}
