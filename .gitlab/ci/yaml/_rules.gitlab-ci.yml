@@ -29,6 +29,7 @@
   - <<: *if-merge-request-pipeline
   - <<: *if-canonical-default-branch
   - <<: *if-canonical-stable-release-ref
+  - <<: *if-canonical-rc-release-ref
 
 .rules:merge-requests:prepare:ci-image:
   rules:
@@ -52,7 +53,6 @@
   - <<: *if-not-canonical-namespace
     when: never
   - <<: *if-canonical-default-branch
-  - <<: *if-canonical-rc-release-ref
 
 .rules:release:rc:
   rules:
