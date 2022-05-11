@@ -1,4 +1,4 @@
-stable gitlab release:
+create GitLab Release entry:
   stage: postrelease
   extends:
   - .rules:release:stable-or-rc
