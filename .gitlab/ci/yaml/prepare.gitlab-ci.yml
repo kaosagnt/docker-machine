@@ -1,0 +1,10 @@
+prepare CI image:
+  stage: prepare
+  extends:
+  - .common:docker-in-docker
+  - .rules:merge-requests:prepare:ci-image
+  script:
+  - docker build --pull --no-cache -t ${CI_IMAGE} -f ./.gitlab/ci/Dockerfile ./.gitlab/ci/
+  - docker login --username ${CI_REGISTRY_USER} --password ${CI_REGISTRY_PASSWORD} ${CI_REGISTRY}
+  - docker push ${CI_IMAGE}
+  - docker logout ${CI_REGISTRY}
