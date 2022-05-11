@@ -1,0 +1,27 @@
+.build_base:
+  stage: build
+  extends:
+  - .common:docker-in-docker
+  - .rules:merge-requests
+  before_script:
+  - apk add -U make bash
+  - export TARGET_OS=$(echo $CI_JOB_NAME | cut -d ' ' -f 1)
+  - export TARGET_ARCH=$(echo $CI_JOB_NAME | cut -d ' ' -f 2)
+  after_script:
+  - "[[ \"$(find bin -type f -name docker-machine*)\" != \"\" ]]"
+  artifacts:
+    paths:
+    - bin/
+    expire_in: 1 week
+
+.build_x: &build_x
+  extends:
+  - .build_base
+  script: make build-x
+
+darwin amd64: *build_x
+linux amd64: *build_x
+linux arm: *build_x
+linux arm64: *build_x
+openbsd amd64: *build_x
+windows amd64: *build_x
