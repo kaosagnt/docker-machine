@@ -48,6 +48,13 @@
     when: never
   - <<: *if-canonical-merge-request-pipeline
 
+.rules:release:development:manual:
+  rules:
+  - <<: *if-not-canonical-namespace
+    when: never
+  - <<: *if-canonical-merge-request-pipeline
+    when: manual
+
 .rules:release:beta:
   rules:
   - <<: *if-not-canonical-namespace
