@@ -1,0 +1,19 @@
+variables:
+  USE_CONTAINER: "true"
+  CI_IMAGE: registry.gitlab.com/gitlab-org/ci-cd/docker-machine/ci:go1.13.15-alpine3.12-1
+  DOCKER_VERSION: "20.10.12"
+
+default:
+  image: "docker:${DOCKER_VERSION}"
+  tags:
+  - gitlab-org
+
+.common:docker-in-docker:
+  services:
+  - "docker:${DOCKER_VERSION}-dind"
+  variables:
+    DOCKER_HOST: tcp://docker:2376/
+    DOCKER_DRIVER: overlay2
+    DOCKER_TLS_CERTDIR: "/certs"
+  tags:
+  - gitlab-org-docker

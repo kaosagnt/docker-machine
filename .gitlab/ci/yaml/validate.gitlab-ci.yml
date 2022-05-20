@@ -1,0 +1,8 @@
+validate:
+  stage: validate
+  extends:
+  - .common:docker-in-docker
+  - .rules:merge-requests
+  before_script:
+  - apk add -U make bash
+  script: make build validate
