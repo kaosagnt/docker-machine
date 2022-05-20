@@ -196,7 +196,7 @@ HOME_URL="https://amazonlinux.com/"`)
 	}
 
 	if !reflect.DeepEqual(*osr, expectedOsr) {
-		t.Fatal("Error with fedora osr parsing: structs do not match")
+		t.Fatal("Error with amazon linux osr parsing: structs do not match")
 	}
 
 }
