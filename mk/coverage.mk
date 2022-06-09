@@ -9,17 +9,8 @@ COVERAGE_PROFILE := $(COVERAGE_OUTPUT)/profile.out
 COVERAGE_HTML := $(COVERAGE_OUTPUT)/index.html
 COVERAGE_MODE := set
 
-# Goveralls dependency
-GOVERALLS_BIN := $(GOPATH)/bin/goveralls
-GOVERALLS := $(shell [ -x $(GOVERALLS_BIN) ] && echo $(GOVERALLS_BIN) || echo '')
-
 # Generate coverage
 coverage-generate: $(COVERAGE_PROFILE)
-
-# Send the results to coveralls
-coverage-send: $(COVERAGE_PROFILE)
-	$(if $(GOVERALLS), , $(error Please install goveralls: go get github.com/mattn/goveralls))
-	@$(GOVERALLS) -service travis-ci -coverprofile="$(COVERAGE_PROFILE)"
 
 # Generate html report
 coverage-html: $(COVERAGE_HTML)

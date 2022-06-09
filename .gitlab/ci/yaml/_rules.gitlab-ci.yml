@@ -1,0 +1,81 @@
+###################
+# Change patterns #
+###################
+
+.if-not-canonical-namespace: &if-not-canonical-namespace
+  if: '$CI_PROJECT_NAMESPACE !~ /^gitlab-org($|\/)/'
+
+.if-merge-request-pipeline: &if-merge-request-pipeline
+  if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+.if-canonical-default-branch: &if-canonical-default-branch
+  if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PROJECT_PATH == "gitlab-org/ci-cd/docker-machine"
+
+.if-canonical-merge-request-pipeline: &if-canonical-merge-request-pipeline
+  if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_PROJECT_PATH == "gitlab-org/ci-cd/docker-machine"
+
+.if-canonical-rc-release-ref: &if-canonical-rc-release-ref
+  if: $CI_COMMIT_REF_NAME =~ /^v[0-9]+\.[0-9]+\.[0-9]+-gitlab\.[0-9]+-rc[0-9]+$/ && $CI_PROJECT_PATH == "gitlab-org/ci-cd/docker-machine"
+
+.if-canonical-stable-release-ref: &if-canonical-stable-release-ref
+  if: $CI_COMMIT_REF_NAME =~ /^v[0-9]+\.[0-9]+\.[0-9]+-gitlab\.[0-9]+$/ && $CI_PROJECT_PATH == "gitlab-org/ci-cd/docker-machine"
+
+#######################
+# Merge Request Rules #
+#######################
+
+.rules:merge-requests:
+  rules:
+  - <<: *if-merge-request-pipeline
+  - <<: *if-canonical-default-branch
+  - <<: *if-canonical-stable-release-ref
+  - <<: *if-canonical-rc-release-ref
+
+.rules:merge-requests:prepare:ci-image:
+  rules:
+  - <<: *if-canonical-merge-request-pipeline
+    changes:
+    - .gitlab/ci/Dockerfile
+    - .gitlab/ci/yaml/prepare.gitlab-ci.yml
+
+#########################
+# Release Request Rules #
+#########################
+
+.rules:release:development:
+  rules:
+  - <<: *if-not-canonical-namespace
+    when: never
+  - <<: *if-canonical-merge-request-pipeline
+
+.rules:release:development:manual:
+  rules:
+  - <<: *if-not-canonical-namespace
+    when: never
+  - <<: *if-canonical-merge-request-pipeline
+    when: manual
+
+.rules:release:beta:
+  rules:
+  - <<: *if-not-canonical-namespace
+    when: never
+  - <<: *if-canonical-default-branch
+
+.rules:release:rc:
+  rules:
+  - <<: *if-not-canonical-namespace
+    when: never
+  - <<: *if-canonical-rc-release-ref
+
+.rules:release:stable-or-rc:
+  rules:
+  - <<: *if-not-canonical-namespace
+    when: never
+  - <<: *if-canonical-stable-release-ref
+  - <<: *if-canonical-rc-release-ref
+
+.rules:release:stable:
+  rules:
+  - <<: *if-not-canonical-namespace
+    when: never
+  - <<: *if-canonical-stable-release-ref

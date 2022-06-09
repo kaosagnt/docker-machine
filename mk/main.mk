@@ -41,7 +41,7 @@ include mk/validate.mk
 .all_coverage: coverage-generate coverage-html coverage-send coverage-serve coverage-clean
 .all_release: release-checksum release
 .all_test: test-short test-long test-integration
-.all_validate: dco fmt vet lint
+.all_validate: fmt vet lint
 
 default: build
 
@@ -49,7 +49,7 @@ install:
 	cp $(PREFIX)/bin/$(PKG_NAME) /usr/local/bin
 
 clean: coverage-clean build-clean
-test: dco fmt test-short lint vet
-validate: dco fmt lint vet test-long
+test: fmt test-short lint vet
+validate: fmt lint vet test-long
 
 .PHONY: .all_build .all_coverage .all_release .all_test .all_validate test build validate clean

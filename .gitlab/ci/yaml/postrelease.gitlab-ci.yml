@@ -1,0 +1,54 @@
+create GitLab Release entry:
+  stage: postrelease
+  extends:
+  - .rules:release:stable-or-rc
+  dependencies: []
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  variables:
+    S3: https://gitlab-docker-machine-downloads.s3.amazonaws.com/$CI_COMMIT_TAG
+  environment:
+    name: stable/gitlab
+    url: https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/releases
+  script:
+  - echo "Releasing to $S3/index.html"
+  release:
+    name: '$CI_COMMIT_TAG'
+    description: |
+      New release of GitLab's fork of Docker Machine is out!
+    tag_name: '$CI_COMMIT_TAG'
+    ref: '$CI_COMMIT_TAG'
+    assets:
+      links:
+      # binaries
+      - name: 'binary: macOS amd64'
+        url: '$S3/docker-machine-Darwin-x86_64'
+        filepath: '/docker-machine-Darwin-x86_64'
+
+      - name: 'binary: Linux amd64'
+        url: '$S3/docker-machine-Linux-x86_64'
+        filepath: '/docker-machine-Linux-x86_64'
+      - name: 'binary: Linux arm'
+        url: '$S3/docker-machine-Linux-armhf'
+        filepath: '/docker-machine-Linux-armhf'
+      - name: 'binary: Linux arm64'
+        url: '$S3/docker-machine-Linux-aarch64'
+        filepath: '/docker-machine-Linux-aarch64'
+
+      - name: 'binary: OpenBSD amd64'
+        url: '$S3/docker-machine-OpenBSD-x86_64'
+        filepath: '/docker-machine-OpenBSD-x86_64'
+
+      - name: 'binary: Windows amd64'
+        url: '$S3/docker-machine-Windows-x86_64.exe'
+        filepath: '/docker-machine-Windows-x86_64.exe'
+
+      # Other files
+      - name: 'checksums'
+        url: '$S3/release.sha256'
+        filepath: '/release.sha256'
+      - name: 'checksums GPG signature'
+        url: '$S3/release.sha256.asc'
+        filepath: '/release.sha256.asc'
+      - name: 'other release artifacts'
+        url: '$S3/index.html'
+        filepath: '/index.html'

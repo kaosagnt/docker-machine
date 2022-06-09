@@ -8,29 +8,35 @@ type region struct {
 	AmiId string
 }
 
-// Ubuntu 16.04 LTS 20180228.1 hvm:ebs-ssd (amd64)
+// Ubuntu 20.04 LTS 20220420 hvm:ebs-ssd (amd64)
 // See https://cloud-images.ubuntu.com/locator/ec2/
-var regionDetails map[string]*region = map[string]*region{
-	"ap-east-1":       {"ami-107d3e61"},
-	"ap-northeast-1":  {"ami-bcb7f6da"},
-	"ap-northeast-2":  {"ami-5073de3e"},
-	"ap-southeast-1":  {"ami-41e4af3d"},
-	"ap-southeast-2":  {"ami-c1498fa3"},
-	"ap-south-1":      {"ami-1083dc7f"},
-	"ca-central-1":    {"ami-8d9e19e9"},
-	"cn-north-1":      {"ami-cc4499a1"}, // Note: this is 20180126
-	"cn-northwest-1":  {"ami-fd0e1a9f"}, // Note: this is 20180126
-	"eu-north-1":      {"ami-017ff17f"},
-	"eu-central-1":    {"ami-bc4925d3"},
-	"eu-west-1":       {"ami-0b541372"},
-	"eu-west-2":       {"ami-ff46a298"},
-	"eu-west-3":       {"ami-9465d3e9"},
-	"sa-east-1":       {"ami-b5501bd9"},
-	"us-east-1":       {"ami-927185ef"},
-	"us-east-2":       {"ami-b9daeddc"},
-	"us-west-1":       {"ami-264c4646"},
-	"us-west-2":       {"ami-78a22900"},
-	"us-gov-west-1":   {"ami-2561ea44"},
+var regionDetails = map[string]*region{
+	"af-south-1":      {AmiId: "ami-0670428c515903d37"},
+	"ap-east-1":       {AmiId: "ami-0350928fdb53ae439"},
+	"ap-northeast-1":  {AmiId: "ami-0a3eb6ca097b78895"},
+	"ap-northeast-2":  {AmiId: "ami-0225bc2990c54ce9a"},
+	"ap-northeast-3":  {AmiId: "ami-0c2223049202ca738"},
+	"ap-south-1":      {AmiId: "ami-05ba3a39a75be1ec4"},
+	"ap-southeast-1":  {AmiId: "ami-0750a20e9959e44ff"},
+	"ap-southeast-2":  {AmiId: "ami-0d539270873f66397"},
+	"ap-southeast-3":  {AmiId: "ami-0f06496957d1fe04a"},
+	"ca-central-1":    {AmiId: "ami-073c944d45ffb4f27"},
+	"cn-north-1":      {AmiId: "ami-0741e7b8b4fb0001c"},
+	"cn-northwest-1":  {AmiId: "ami-0883e8062ff31f727"},
+	"eu-central-1":    {AmiId: "ami-02584c1c9d05efa69"},
+	"eu-north-1":      {AmiId: "ami-09f0506c9ef0fb473"},
+	"eu-south-1":      {AmiId: "ami-06ea0ad3f5adc2565"},
+	"eu-west-1":       {AmiId: "ami-00e7df8df28dfa791"},
+	"eu-west-2":       {AmiId: "ami-00826bd51e68b1487"},
+	"eu-west-3":       {AmiId: "ami-0a21d1c76ac56fee7"},
+	"me-south-1":      {AmiId: "ami-05b680b37c7917206"},
+	"sa-east-1":       {AmiId: "ami-077518a464c82703b"},
+	"us-east-1":       {AmiId: "ami-0c4f7023847b90238"},
+	"us-east-2":       {AmiId: "ami-0eea504f45ef7a8f7"},
+	"us-gov-east-1":   {AmiId: "ami-0eb7ef4cc0594fa04"},
+	"us-gov-west-1":   {AmiId: "ami-029a634618d6c0300"},
+	"us-west-1":       {AmiId: "ami-0487b1fe60c1fd1a2"},
+	"us-west-2":       {AmiId: "ami-0cb4e786f15603b0d"},
 	"custom-endpoint": {""},
 }
 

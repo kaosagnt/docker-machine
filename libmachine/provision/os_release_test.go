@@ -58,6 +58,15 @@ ANSI_COLOR="0;34"
 HOME_URL="https://fedoraproject.org/"
 BUG_REPORT_URL="https://bugzilla.redhat.com/"
 `)
+		amzn2 = []byte(`NAME="Amazon Linux"
+VERSION="2"
+ID="amzn"
+ID_LIKE="centos rhel fedora"
+VERSION_ID="2"
+PRETTY_NAME="Amazon Linux 2"
+ANSI_COLOR="0;33"
+CPE_NAME="cpe:2.3:o:amazon:amazon_linux:2"
+HOME_URL="https://amazonlinux.com/"`)
 	)
 
 	osr, err := NewOsRelease(ubuntuTrusty)
@@ -168,6 +177,28 @@ BUG_REPORT_URL="https://bugzilla.redhat.com/"
 	if !reflect.DeepEqual(*osr, expectedOsr) {
 		t.Fatal("Error with fedora osr parsing: structs do not match")
 	}
+
+	osr, err = NewOsRelease(amzn2)
+	if err != nil {
+		t.Fatalf("Unexpected error parsing os release: %s", err)
+	}
+
+	expectedOsr = OsRelease{
+		Name:       "Amazon Linux",
+		Version:    "2",
+		ID:         "amzn",
+		IDLike:     "centos rhel fedora",
+		VersionID:  "2",
+		PrettyName: "Amazon Linux 2",
+		AnsiColor:  "0;33",
+		CPEName:    "cpe:2.3:o:amazon:amazon_linux:2",
+		HomeURL:    "https://amazonlinux.com/",
+	}
+
+	if !reflect.DeepEqual(*osr, expectedOsr) {
+		t.Fatal("Error with amazon linux osr parsing: structs do not match")
+	}
+
 }
 
 func TestParseLine(t *testing.T) {

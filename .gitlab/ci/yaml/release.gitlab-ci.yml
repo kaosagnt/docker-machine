@@ -1,0 +1,68 @@
+.release:
+  stage: release
+  image: ${CI_IMAGE}
+
+.release_S3:
+  dependencies:
+  - darwin amd64
+  - linux amd64
+  - linux arm
+  - linux arm64
+  - openbsd amd64
+  - windows amd64
+  variables:
+    S3_URL: s3://${S3_BUCKET}/mr-${CI_MERGE_REQUEST_IID}
+  script:
+  - ./.gitlab/ci/scripts/release_s3.sh
+  environment:
+    url: https://${S3_BUCKET}.s3.amazonaws.com/mr-${CI_MERGE_REQUEST_IID}/index.html
+
+release development S3:
+  extends:
+  - .rules:release:development
+  - .release
+  - .release_S3
+  environment:
+    name: development/S3/mr-${CI_MERGE_REQUEST_IID}
+    on_stop: 'stop release development S3'
+
+stop release development S3:
+  dependencies: []
+  needs:
+  - release development S3
+  extends:
+  - .rules:release:development:manual
+  - .release
+  - .release_S3
+  variables:
+    GIT_STRATEGY: none
+  script:
+  - aws s3 rm ${S3_URL} --recursive
+  environment:
+    name: development/S3/mr-${CI_MERGE_REQUEST_IID}
+    action: stop
+  allow_failure: true
+
+release beta S3:
+  extends:
+  - .rules:release:beta
+  - .release
+  - .release_S3
+  environment:
+    name: beta/S3
+
+release RC S3:
+  extends:
+  - .rules:release:rc
+  - .release
+  - .release_S3
+  environment:
+    name: RC/S3
+
+release stable S3:
+  extends:
+  - .rules:release:stable
+  - .release
+  - .release_S3
+  environment:
+    name: stable/S3
