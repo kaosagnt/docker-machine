@@ -386,6 +386,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 			// The maximum supported disk size is 1000GB, the cast should be fine.
 			DiskSizeGb: int64(d.DiskSize),
 			DiskType:   c.diskType(),
+			Labels:     parseLabels(d),
 		}
 	} else {
 		instance.Disks[0].Source = c.zoneURL + "/disks/" + c.instanceName + "-disk"
