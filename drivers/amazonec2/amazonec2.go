@@ -754,7 +754,7 @@ func (d *Driver) innerCreate() error {
 			ImageId:           &d.AMI,
 			MinCount:          aws.Int64(1),
 			MaxCount:          aws.Int64(1),
-			Placement:         &ec2.Placement{
+			Placement: &ec2.Placement{
 				AvailabilityZone: &regionZone,
 			},
 			KeyName:           &d.KeyName,
@@ -1136,8 +1136,6 @@ func (d *Driver) createTagSpecifications() []*ec2.TagSpecification {
 		},
 	}
 }
-
-
 
 func (d *Driver) getTagResources() []*string {
 	resources := []*string{&d.InstanceId}
