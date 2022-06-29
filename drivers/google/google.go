@@ -227,7 +227,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.StringSliceFlag{
 			Name:  "google-label",
-			Usage: "Label to set on the VM (format: key:value). Repeat the flag to set more labels",
+			Usage: "Label to set on the VM and its disks (format: key:value). Repeat the flag to set more labels",
 		},
 		mcnflag.StringSliceFlag{
 			Name:  "google-metadata",
