@@ -13,9 +13,9 @@
   script:
   - ./.gitlab/ci/scripts/release_s3.sh
   variables:
-    S3_URL: s3://${S3_BUCKET}/${CI_COMMIT_REF_SLUG}
+    S3_URL: s3://${S3_BUCKET}/${CI_COMMIT_REF_NAME}
   environment:
-    url: https://${S3_BUCKET}.s3.amazonaws.com/${CI_COMMIT_REF_SLUG}/index.html
+    url: https://${S3_BUCKET}.s3.amazonaws.com/${CI_COMMIT_REF_NAME}/index.html
 
 release development S3:
   extends:
