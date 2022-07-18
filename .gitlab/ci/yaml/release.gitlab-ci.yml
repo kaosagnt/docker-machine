@@ -39,6 +39,7 @@ stop release development S3:
   - .release_S3
   variables:
     GIT_STRATEGY: none
+    S3_URL: s3://${S3_BUCKET}/mr-${CI_MERGE_REQUEST_IID}
   script:
   - aws s3 rm ${S3_URL} --recursive
   environment:
