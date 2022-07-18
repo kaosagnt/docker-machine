@@ -10,19 +10,22 @@
   - linux arm64
   - openbsd amd64
   - windows amd64
-  variables:
-    S3_URL: s3://${S3_BUCKET}/mr-${CI_MERGE_REQUEST_IID}
   script:
   - ./.gitlab/ci/scripts/release_s3.sh
+  variables:
+    S3_URL: s3://${S3_BUCKET}/${CI_COMMIT_REF_SLUG}
   environment:
-    url: https://${S3_BUCKET}.s3.amazonaws.com/mr-${CI_MERGE_REQUEST_IID}/index.html
+    url: https://${S3_BUCKET}.s3.amazonaws.com/${CI_COMMIT_REF_SLUG}/index.html
 
 release development S3:
   extends:
   - .rules:release:development
   - .release
   - .release_S3
+  variables:
+    S3_URL: s3://${S3_BUCKET}/mr-${CI_MERGE_REQUEST_IID}
   environment:
+    url: https://${S3_BUCKET}.s3.amazonaws.com/mr-${CI_MERGE_REQUEST_IID}/index.html
     name: development/S3/mr-${CI_MERGE_REQUEST_IID}
     on_stop: 'stop release development S3'
 
