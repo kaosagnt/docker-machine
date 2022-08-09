@@ -70,9 +70,9 @@ type Driver struct {
 
 const (
 	defaultZone              = "us-central1-a"
-	defaultUser              = "docker-user"
+	defaultUser              = "ubuntu"
 	defaultMachineType       = "n1-standard-1"
-	defaultImageName         = "ubuntu-os-cloud/global/images/ubuntu-1604-xenial-v20170721"
+	defaultImageName         = "ubuntu-os-cloud/global/images/ubuntu-1604-xenial-v20210928"
 	defaultServiceAccount    = "default"
 	defaultScopes            = "https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
 	defaultDiskType          = "pd-standard"
@@ -227,7 +227,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.StringSliceFlag{
 			Name:  "google-label",
-			Usage: "Label to set on the VM (format: key:value). Repeat the flag to set more labels",
+			Usage: "Label to set on the VM and its disks (format: key:value). Repeat the flag to set more labels",
 		},
 		mcnflag.StringSliceFlag{
 			Name:  "google-metadata",
