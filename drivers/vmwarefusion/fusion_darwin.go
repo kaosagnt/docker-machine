@@ -54,7 +54,7 @@ const (
 	defaultSSHPass  = B2DPass
 	defaultDiskSize = 20000
 	defaultCPU      = 1
-	defaultMemory   = 1024
+	defaultMemory   = 2048
 )
 
 // GetCreateFlags registers the flags this driver adds to

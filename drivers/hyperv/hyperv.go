@@ -28,7 +28,7 @@ type Driver struct {
 
 const (
 	defaultDiskSize             = 20000
-	defaultMemory               = 1024
+	defaultMemory               = 2048
 	defaultCPU                  = 1
 	defaultVLanID               = 0
 	defaultDisableDynamicMemory = false

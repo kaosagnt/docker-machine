@@ -44,7 +44,7 @@ type deviceConfig struct {
 }
 
 const (
-	defaultMemory          = 1024
+	defaultMemory          = 2048
 	defaultDiskSize        = 0
 	defaultRegion          = "dal01"
 	defaultCpus            = 1

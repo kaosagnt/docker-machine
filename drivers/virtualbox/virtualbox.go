@@ -22,7 +22,7 @@ import (
 
 const (
 	defaultCPU                 = 1
-	defaultMemory              = 1024
+	defaultMemory              = 2048
 	defaultBoot2DockerURL      = ""
 	defaultBoot2DockerImportVM = ""
 	defaultHostOnlyCIDR        = "192.168.99.1/24"
