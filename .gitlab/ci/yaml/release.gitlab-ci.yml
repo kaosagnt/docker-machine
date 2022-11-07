@@ -3,13 +3,13 @@
   image: ${CI_IMAGE}
 
 .release_S3:
-  dependencies:
-  - darwin amd64
-  - linux amd64
-  - linux arm
-  - linux arm64
-  - openbsd amd64
-  - windows amd64
+  needs:
+  - 'darwin amd64'
+  - 'linux amd64'
+  - 'linux arm'
+  - 'linux arm64'
+  - 'openbsd amd64'
+  - 'windows amd64'
   script:
   - ./.gitlab/ci/scripts/release_s3.sh
   variables:

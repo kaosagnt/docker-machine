@@ -6,11 +6,18 @@ __aws_s3_sync() {
   local source="$1"
   local target="$2"
 
+  local awsDebug=""
+  if [[ -n "${DEBUG_AWS_CLI}" ]]; then
+      awsDebug="--debug"
+  fi
+
+  echo -e "\033[32;1mSyncing with ${target}\033[0m"
+
   if [[ "${DEBUG_S3_SYNC}" == "true" ]]; then
     set -x
   fi
 
-  aws s3 sync "${source}" "${target}" --acl public-read
+  aws ${awsDebug} --color on s3 sync "${source}" "${target}" --acl public-read
   set +x
 }
 
@@ -42,7 +49,12 @@ __aws_s3_sync bin "${S3_URL}"
 
 # Copy the binaries to the latest directory.
 LATEST_STABLE_TAG=$(git -c versionsort.prereleaseSuffix="-rc" tag -l "v*.*.*" --sort=-v:refname | awk '!/rc/' | head -n 1)
-if [ $(git describe --exact-match --match ${LATEST_STABLE_TAG} >/dev/null 2>&1) ]; then
+
+echo "Latest stable tag is: ${LATEST_STABLE_TAG}"
+
+if git describe --exact-match --match ${LATEST_STABLE_TAG} >/dev/null 2>&1; then
+  echo "Syncing the 'latest' bucket"
+
   __aws_s3_sync bin "s3://${S3_BUCKET}/latest"
 fi
 

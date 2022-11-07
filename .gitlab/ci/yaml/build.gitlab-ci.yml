@@ -3,6 +3,8 @@
   extends:
   - .common:docker-in-docker
   - .rules:merge-requests
+  needs:
+  - 'prepare done'
   before_script:
   - apk add -U make bash
   - export TARGET_OS=$(echo $CI_JOB_NAME | cut -d ' ' -f 1)

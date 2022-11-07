@@ -6,3 +6,8 @@ validate:
   before_script:
   - apk add -U make bash
   script: make build validate
+
+prepare done:
+  stage: validate
+  extends:
+  - .common:stage-done
