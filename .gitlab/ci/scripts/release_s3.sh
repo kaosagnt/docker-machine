@@ -52,8 +52,8 @@ LATEST_STABLE_TAG=$(git -c versionsort.prereleaseSuffix="-rc" tag -l "v*.*.*" --
 
 echo "Latest stable tag is: ${LATEST_STABLE_TAG}"
 
-if [ $(git describe --exact-match --match ${LATEST_STABLE_TAG} >/dev/null 2>&1) ]; then
-    echo "Syncing the 'latest' bucket"
+if git describe --exact-match --match ${LATEST_STABLE_TAG} >/dev/null 2>&1; then
+  echo "Syncing the 'latest' bucket"
 
   __aws_s3_sync bin "s3://${S3_BUCKET}/latest"
 fi
