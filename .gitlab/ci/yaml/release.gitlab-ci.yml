@@ -4,6 +4,7 @@
 
 .release_S3:
   needs:
+  - 'validate'
   - 'darwin amd64'
   - 'linux amd64'
   - 'linux arm'
