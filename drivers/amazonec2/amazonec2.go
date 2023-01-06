@@ -98,6 +98,7 @@ type Driver struct {
 	DeviceName                    string
 	RootSize                      int64
 	VolumeType                    string
+	VolumeEncrypted               bool
 	IamInstanceProfile            string
 	VpcId                         string
 	SubnetId                      string
@@ -212,6 +213,10 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "Amazon EBS volume type",
 			Value:  defaultVolumeType,
 			EnvVar: "AWS_VOLUME_TYPE",
+		},
+		mcnflag.BoolFlag{
+			Name:  "amazonec2-volume-encrypted",
+			Usage: "Set this flag to encrypt storage volume",
 		},
 		mcnflag.StringFlag{
 			Name:   "amazonec2-iam-instance-profile",
@@ -387,6 +392,7 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.DeviceName = flags.String("amazonec2-device-name")
 	d.RootSize = int64(flags.Int("amazonec2-root-size"))
 	d.VolumeType = flags.String("amazonec2-volume-type")
+	d.VolumeEncrypted = flags.Bool("amazonec2-volume-encrypted")
 	d.IamInstanceProfile = flags.String("amazonec2-iam-instance-profile")
 	d.SSHUser = flags.String("amazonec2-ssh-user")
 	d.SSHPort = flags.Int("amazonec2-ssh-port")
@@ -643,6 +649,7 @@ func (d *Driver) innerCreate() error {
 		Ebs: &ec2.EbsBlockDevice{
 			VolumeSize:          aws.Int64(d.RootSize),
 			VolumeType:          aws.String(d.VolumeType),
+                        Encrypted:           aws.Bool(d.VolumeEncrypted),
 			DeleteOnTermination: aws.Bool(true),
 		},
 	}
