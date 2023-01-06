@@ -649,7 +649,7 @@ func (d *Driver) innerCreate() error {
 		Ebs: &ec2.EbsBlockDevice{
 			VolumeSize:          aws.Int64(d.RootSize),
 			VolumeType:          aws.String(d.VolumeType),
-                        Encrypted:           aws.Bool(d.VolumeEncrypted),
+			Encrypted:           aws.Bool(d.VolumeEncrypted),
 			DeleteOnTermination: aws.Bool(true),
 		},
 	}
