@@ -658,8 +658,10 @@ func (d *Driver) innerCreate() error {
 			VolumeType:          aws.String(d.VolumeType),
 			Encrypted:           aws.Bool(d.VolumeEncrypted),
 			DeleteOnTermination: aws.Bool(true),
-			KmsKeyId:            aws.String(d.VolumeKmsKeyId),
 		},
+	}
+	if d.VolumeKmsKeyId != "" {
+		bdm.Ebs.KmsKeyId = aws.String(d.VolumeKmsKeyId)
 	}
 	netSpecs := []*ec2.InstanceNetworkInterfaceSpecification{{
 		DeviceIndex:              aws.Int64(0), // eth0
