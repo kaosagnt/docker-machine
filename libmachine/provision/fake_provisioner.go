@@ -43,6 +43,8 @@ func (fp *FakeProvisioner) GetAuthOptions() auth.Options {
 	return auth.Options{}
 }
 
+func (fp *FakeProvisioner) SetAuthOptions(opts auth.Options) {}
+
 func (fp *FakeProvisioner) GetSwarmOptions() swarm.Options {
 	return swarm.Options{}
 }

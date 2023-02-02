@@ -165,11 +165,9 @@ func (provisioner *RedHatProvisioner) Provision(swarmOptions swarm.Options, auth
 		return err
 	}
 
-	if err := makeDockerOptionsDir(provisioner); err != nil {
+	if err := setupRemoteAuthOptions(provisioner); err != nil {
 		return err
 	}
-
-	provisioner.AuthOptions = setRemoteAuthOptions(provisioner)
 
 	if err := ConfigureAuth(provisioner); err != nil {
 		return err

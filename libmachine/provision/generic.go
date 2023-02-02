@@ -64,6 +64,10 @@ func (provisioner *GenericProvisioner) SetHostname(hostname string) error {
 	return nil
 }
 
+func (provisioner *GenericProvisioner) SetAuthOptions(opts auth.Options) {
+	provisioner.AuthOptions = opts
+}
+
 func (provisioner *GenericProvisioner) GetDockerOptionsDir() string {
 	return provisioner.DockerOptionsDir
 }

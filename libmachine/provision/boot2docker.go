@@ -128,6 +128,10 @@ func (provisioner *Boot2DockerProvisioner) GetAuthOptions() auth.Options {
 	return provisioner.AuthOptions
 }
 
+func (provisioner *Boot2DockerProvisioner) SetAuthOptions(opts auth.Options) {
+	provisioner.AuthOptions = opts
+}
+
 func (provisioner *Boot2DockerProvisioner) GetSwarmOptions() swarm.Options {
 	return provisioner.SwarmOptions
 }
@@ -245,11 +249,9 @@ func (provisioner *Boot2DockerProvisioner) Provision(swarmOptions swarm.Options,
 		return err
 	}
 
-	if err = makeDockerOptionsDir(provisioner); err != nil {
+	if err := setupRemoteAuthOptions(provisioner); err != nil {
 		return err
 	}
-
-	provisioner.AuthOptions = setRemoteAuthOptions(provisioner)
 
 	if err = ConfigureAuth(provisioner); err != nil {
 		return err
