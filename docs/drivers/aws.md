@@ -115,6 +115,7 @@ By default, the Amazon EC2 driver will use the Ubuntu 20.04 image for the given 
 | ap-northeast-2 | ami-0225bc2990c54ce9a |
 | ap-northeast-3 | ami-0c2223049202ca738 |
 | ap-south-1 | ami-05ba3a39a75be1ec4 |
+| ap-south-2 | ami-0cdec4d7db18a5cdb |
 | ap-southeast-1 | ami-0750a20e9959e44ff |
 | ap-southeast-2 | ami-0d539270873f66397 |
 | ap-southeast-3 | ami-0f06496957d1fe04a |
@@ -122,11 +123,14 @@ By default, the Amazon EC2 driver will use the Ubuntu 20.04 image for the given 
 | cn-north-1 | ami-0741e7b8b4fb0001c |
 | cn-northwest-1 | ami-0883e8062ff31f727 |
 | eu-central-1 | ami-02584c1c9d05efa69 |
+| eu-central-2 | ami-0968892c976bc03f2 |
 | eu-north-1 | ami-09f0506c9ef0fb473 |
 | eu-south-1 | ami-06ea0ad3f5adc2565 |
+| eu-south-2 | ami-0d3d6b90b90290cdd |
 | eu-west-1 | ami-00e7df8df28dfa791 |
 | eu-west-2 | ami-00826bd51e68b1487 |
 | eu-west-3 | ami-0a21d1c76ac56fee7 |
+| me-central-1 | ami-04e59379df0314070 |
 | me-south-1 | ami-05b680b37c7917206 |
 | sa-east-1 | ami-077518a464c82703b |
 | us-east-1 | ami-0c4f7023847b90238 |
