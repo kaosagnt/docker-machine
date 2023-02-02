@@ -120,7 +120,9 @@ func (provisioner *DebianProvisioner) Provision(swarmOptions swarm.Options, auth
 		return err
 	}
 
-	provisioner.AuthOptions = setRemoteAuthOptions(provisioner)
+	if err := setupRemoteAuthOptions(provisioner); err != nil {
+		return err
+	}
 
 	log.Debug("configuring auth")
 	if err := ConfigureAuth(provisioner); err != nil {

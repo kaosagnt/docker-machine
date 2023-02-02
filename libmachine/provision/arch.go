@@ -133,7 +133,9 @@ func (provisioner *ArchProvisioner) Provision(swarmOptions swarm.Options, authOp
 		return err
 	}
 
-	provisioner.AuthOptions = setRemoteAuthOptions(provisioner)
+	if err := setupRemoteAuthOptions(provisioner); err != nil {
+		return err
+	}
 
 	log.Debug("Configuring auth")
 	if err := ConfigureAuth(provisioner); err != nil {

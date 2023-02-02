@@ -130,7 +130,9 @@ func (provisioner *UbuntuSystemdProvisioner) Provision(swarmOptions swarm.Option
 		return err
 	}
 
-	provisioner.AuthOptions = setRemoteAuthOptions(provisioner)
+	if err := setupRemoteAuthOptions(provisioner); err != nil {
+		return err
+	}
 
 	log.Debug("configuring auth")
 	if err := ConfigureAuth(provisioner); err != nil {
