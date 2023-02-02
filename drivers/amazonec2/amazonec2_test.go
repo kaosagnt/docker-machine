@@ -243,7 +243,7 @@ func TestValidateAwsRegionValid(t *testing.T) {
 }
 
 func TestValidateAwsRegionInvalid(t *testing.T) {
-	regions := []string{"eu-central-2"}
+	regions := []string{"eu-invalid-2"}
 
 	for _, region := range regions {
 		_, err := validateAwsRegion(region)
