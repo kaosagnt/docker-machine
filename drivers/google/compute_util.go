@@ -69,17 +69,13 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		return nil, err
 	}
 
-	var networkProject string
-	if strings.Contains(driver.Network, "/projects/") {
-		var splittedElements = strings.Split(driver.Network, "/")
-		for i, element := range splittedElements {
-			if element == "projects" {
-				networkProject = splittedElements[i+1]
-				break
-			}
-		}
-	} else {
-		networkProject = driver.Project
+	// networkProject is equals to the main project set for the driver, but if the network property is a complete api
+	// url we will override with the ones specified inside it. This will allow to setup runners in a project with a
+	// shared network
+	networkProject := driver.Project
+	networkProjectRegex := regexp.MustCompile(apiURL + `(?P<project_name>[^/]+)/global/networks/(?P<network_name>[A-Za-z-]+)`)
+	if matches := networkProjectRegex.FindStringSubmatch(driver.Network); len(matches) > 0 {
+		networkProject = matches[1]
 	}
 
 	return &ComputeUtil{
@@ -264,7 +260,8 @@ func (c *ComputeUtil) openFirewallPorts(d *Driver) error {
 	if rule == nil {
 		create = true
 		var net string
-		if strings.Contains(d.Network, "/networks/") {
+		networkRegex := regexp.MustCompile(`/networks/`)
+		if networkRegex.Match(d.Network) {
 			net = d.Network
 		} else {
 			net = c.globalURL + "/networks/" + d.Network
