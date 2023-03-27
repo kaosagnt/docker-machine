@@ -1121,28 +1121,29 @@ func (d *Driver) createTagSpecifications() []*ec2.TagSpecification {
 		}
 	}
 
-	tagSpecification := []*ec2.TagSpecification{
-		{
-			ResourceType: aws.String("volume"),
-			Tags:         tags,
-		},
-		{
-			ResourceType: aws.String("network-interface"),
-			Tags:         tags,
-		},
-	}
-
 	if d.RequestSpotInstance {
-		return append(tagSpecification, &ec2.TagSpecification{
-			ResourceType: aws.String("spot-instances-request"),
-			Tags:         tags,
-		})
+		return []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("spot-instances-request"),
+				Tags:         tags,
+			},
+		}
+	} else {
+		return []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("instance"),
+				Tags:         tags,
+			},
+			{
+				ResourceType: aws.String("volume"),
+				Tags:         tags,
+			},
+			{
+				ResourceType: aws.String("network-interface"),
+				Tags:         tags,
+			},
+		}
 	}
-
-	return append(tagSpecification, &ec2.TagSpecification{
-		ResourceType: aws.String("instance"),
-		Tags:         tags,
-	})
 }
 
 func (d *Driver) getTagResources() []*string {
