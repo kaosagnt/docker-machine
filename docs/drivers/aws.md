@@ -62,6 +62,8 @@ You can use environment variables:
 -   `--amazonec2-device-name`: The root device name of the instance.
 -   `--amazonec2-root-size`: The root disk size of the instance (in GB).
 -   `--amazonec2-volume-type`: The Amazon EBS volume type to be attached to the instance.
+-   `--amazonec2-volume-encrypted`: Encrypt Amazon EBS volume attached to the instance.
+-   `--amazonec2-volume-kms-key`: The KMS Key ID/ARN/Alias to be used to encrypt the volume.
 -   `--amazonec2-iam-instance-profile`: The AWS IAM role name to be used as the instance profile.
 -   `--amazonec2-ssh-user`: The SSH Login username, which must match the default SSH user set in the ami used.
 -   `--amazonec2-request-spot-instance`: Use spot instances.
@@ -92,6 +94,8 @@ You can use environment variables:
 | `--amazonec2-device-name`                | `AWS_DEVICE_NAME`       | `/dev/sda1`      |
 | `--amazonec2-root-size`                  | `AWS_ROOT_SIZE`         | `16`             |
 | `--amazonec2-volume-type`                | `AWS_VOLUME_TYPE`       | `gp2`            |
+| `--amazonec2-volume-encrypted`           | -                       | `false`          |
+| `--amazonec2-volume-kms-key`             | `AWS_VOLUME_KMS_KEY`    | -                |
 | `--amazonec2-iam-instance-profile`       | `AWS_INSTANCE_PROFILE`  | -                |
 | `--amazonec2-ssh-user`                   | `AWS_SSH_USER`          | `ubuntu`         |
 | `--amazonec2-request-spot-instance`      | -                       | `false`          |
