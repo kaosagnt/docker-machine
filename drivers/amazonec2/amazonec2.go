@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -49,8 +48,7 @@ const (
 )
 
 const (
-	keypairNotFoundCode             = "InvalidKeyPair.NotFound"
-	spotInstanceRequestNotFoundCode = "InvalidSpotInstanceRequestID.NotFound"
+	keypairNotFoundCode = "InvalidKeyPair.NotFound"
 )
 
 var (
@@ -119,8 +117,6 @@ type Driver struct {
 	UserDataFile                  string
 	MetadataTokenSetting          string
 	MetadataTokenResponseHopLimit int64
-
-	spotInstanceRequestId string
 }
 
 type clientFactory interface {
@@ -675,129 +671,49 @@ func (d *Driver) innerCreate() error {
 
 	var instance *ec2.Instance
 
+	req := ec2.RunInstancesInput{
+		TagSpecifications: tagSpecifications,
+		ImageId:           &d.AMI,
+		MinCount:          aws.Int64(1),
+		MaxCount:          aws.Int64(1),
+		Placement: &ec2.Placement{
+			AvailabilityZone: &regionZone,
+		},
+		KeyName:           &d.KeyName,
+		InstanceType:      &d.InstanceType,
+		NetworkInterfaces: netSpecs,
+		MetadataOptions: &ec2.InstanceMetadataOptionsRequest{
+			HttpTokens:              &d.MetadataTokenSetting,
+			HttpPutResponseHopLimit: &d.MetadataTokenResponseHopLimit,
+		},
+		Monitoring: &ec2.RunInstancesMonitoringEnabled{Enabled: aws.Bool(d.Monitoring)},
+		IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
+			Name: &d.IamInstanceProfile,
+		},
+		EbsOptimized:        &d.UseEbsOptimizedInstance,
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{bdm},
+		UserData:            &userdata,
+	}
 	if d.RequestSpotInstance {
-		req := ec2.RequestSpotInstancesInput{
-			TagSpecifications: tagSpecifications,
-			LaunchSpecification: &ec2.RequestSpotLaunchSpecification{
-				ImageId: &d.AMI,
-				Placement: &ec2.SpotPlacement{
-					AvailabilityZone: &regionZone,
-				},
-				KeyName:           &d.KeyName,
-				InstanceType:      &d.InstanceType,
-				NetworkInterfaces: netSpecs,
-				Monitoring:        &ec2.RunInstancesMonitoringEnabled{Enabled: aws.Bool(d.Monitoring)},
-				IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
-					Name: &d.IamInstanceProfile,
-				},
-				EbsOptimized:        &d.UseEbsOptimizedInstance,
-				BlockDeviceMappings: []*ec2.BlockDeviceMapping{bdm},
-				UserData:            &userdata,
+		req.InstanceMarketOptions = &ec2.InstanceMarketOptionsRequest{
+			MarketType: aws.String("spot"),
+			SpotOptions: &ec2.SpotMarketOptions{
+				MaxPrice: &d.SpotPrice,
 			},
-			InstanceCount: aws.Int64(1),
-			SpotPrice:     &d.SpotPrice,
 		}
 		if d.BlockDurationMinutes != 0 {
-			req.BlockDurationMinutes = &d.BlockDurationMinutes
+			req.InstanceMarketOptions.SpotOptions.BlockDurationMinutes = &d.BlockDurationMinutes
 		}
-
-		spotInstanceRequest, err := d.getClient().RequestSpotInstances(&req)
-		if err != nil {
-			return fmt.Errorf("Error request spot instance: %v", err)
-		}
-		if spotInstanceRequest == nil || len((*spotInstanceRequest).SpotInstanceRequests) < 1 {
-			return fmt.Errorf("error requesting spot instance: %v", errorUnprocessableResponse)
-		}
-		d.spotInstanceRequestId = *spotInstanceRequest.SpotInstanceRequests[0].SpotInstanceRequestId
-
-		log.Info("Waiting for spot instance...")
-		for i := 0; i < 3; i++ {
-			// AWS eventual consistency means we could not have SpotInstanceRequest ready yet
-			err = d.getClient().WaitUntilSpotInstanceRequestFulfilled(&ec2.DescribeSpotInstanceRequestsInput{
-				SpotInstanceRequestIds: []*string{&d.spotInstanceRequestId},
-			})
-			if err != nil {
-				if awsErr, ok := err.(awserr.Error); ok {
-					if awsErr.Code() == spotInstanceRequestNotFoundCode {
-						time.Sleep(5 * time.Second)
-						continue
-					}
-				}
-				return fmt.Errorf("Error fulfilling spot request: %v", err)
-			}
-			break
-		}
-		log.Infof("Created spot instance request %v", d.spotInstanceRequestId)
-		// resolve instance id
-		for i := 0; i < 3; i++ {
-			// Even though the waiter succeeded, eventual consistency means we could
-			// get a describe output that does not include this information. Try a
-			// few times just in case
-			var resolvedSpotInstance *ec2.DescribeSpotInstanceRequestsOutput
-			resolvedSpotInstance, err = d.getClient().DescribeSpotInstanceRequests(&ec2.DescribeSpotInstanceRequestsInput{
-				SpotInstanceRequestIds: []*string{&d.spotInstanceRequestId},
-			})
-			if err != nil {
-				// Unexpected; no need to retry
-				return fmt.Errorf("Error describing previously made spot instance request: %v", err)
-			}
-			if resolvedSpotInstance == nil || len((*resolvedSpotInstance).SpotInstanceRequests) < 1 {
-				return fmt.Errorf("Error describing spot instance: %v", errorUnprocessableResponse)
-			}
-
-			maybeInstanceId := resolvedSpotInstance.SpotInstanceRequests[0].InstanceId
-			if maybeInstanceId != nil {
-				var instances *ec2.DescribeInstancesOutput
-				instances, err = d.getClient().DescribeInstances(&ec2.DescribeInstancesInput{
-					InstanceIds: []*string{maybeInstanceId},
-				})
-				if err != nil {
-					// Retry if we get an id from spot instance but EC2 doesn't recognize it yet; see above, eventual consistency possible
-					continue
-				}
-				instance = instances.Reservations[0].Instances[0]
-				err = nil
-				break
-			}
-			time.Sleep(5 * time.Second)
-		}
-
-		if err != nil {
-			return fmt.Errorf("Error resolving spot instance to real instance: %v", err)
-		}
-	} else {
-		inst, err := d.getClient().RunInstances(&ec2.RunInstancesInput{
-			TagSpecifications: tagSpecifications,
-			ImageId:           &d.AMI,
-			MinCount:          aws.Int64(1),
-			MaxCount:          aws.Int64(1),
-			Placement: &ec2.Placement{
-				AvailabilityZone: &regionZone,
-			},
-			KeyName:           &d.KeyName,
-			InstanceType:      &d.InstanceType,
-			NetworkInterfaces: netSpecs,
-			MetadataOptions: &ec2.InstanceMetadataOptionsRequest{
-				HttpTokens:              &d.MetadataTokenSetting,
-				HttpPutResponseHopLimit: &d.MetadataTokenResponseHopLimit,
-			},
-			Monitoring: &ec2.RunInstancesMonitoringEnabled{Enabled: aws.Bool(d.Monitoring)},
-			IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
-				Name: &d.IamInstanceProfile,
-			},
-			EbsOptimized:        &d.UseEbsOptimizedInstance,
-			BlockDeviceMappings: []*ec2.BlockDeviceMapping{bdm},
-			UserData:            &userdata,
-		})
-
-		if err != nil {
-			return fmt.Errorf("Error launching instance: %v", err)
-		}
-		if inst == nil || len(inst.Instances) < 1 {
-			return fmt.Errorf("error launching instance: %v", errorUnprocessableResponse)
-		}
-		instance = inst.Instances[0]
 	}
+	inst, err := d.getClient().RunInstances(&req)
+
+	if err != nil {
+		return fmt.Errorf("Error launching instance: %v", err)
+	}
+	if inst == nil || len(inst.Instances) < 1 {
+		return fmt.Errorf("error launching instance: %v", errorUnprocessableResponse)
+	}
+	instance = inst.Instances[0]
 
 	d.InstanceId = *instance.InstanceId
 
@@ -968,14 +884,6 @@ func (d *Driver) Remove() error {
 		multierr.Errs = append(multierr.Errs, err)
 	}
 
-	// In case of failure waiting for a SpotInstance, we must cancel the unfulfilled request, otherwise an instance may be created later.
-	// If the instance was created, terminating it will be enough for canceling the SpotInstanceRequest
-	if d.RequestSpotInstance && d.spotInstanceRequestId != "" {
-		if err := d.cancelSpotInstanceRequest(); err != nil {
-			multierr.Errs = append(multierr.Errs, err)
-		}
-	}
-
 	if !d.ExistingKey {
 		if err := d.deleteKeyPair(); err != nil {
 			multierr.Errs = append(multierr.Errs, err)
@@ -987,15 +895,6 @@ func (d *Driver) Remove() error {
 	}
 
 	return multierr
-}
-
-func (d *Driver) cancelSpotInstanceRequest() error {
-	// NB: Canceling a Spot instance request does not terminate running Spot instances associated with the request
-	_, err := d.getClient().CancelSpotInstanceRequests(&ec2.CancelSpotInstanceRequestsInput{
-		SpotInstanceRequestIds: []*string{&d.spotInstanceRequestId},
-	})
-
-	return err
 }
 
 func (d *Driver) getInstance() (*ec2.Instance, error) {

@@ -97,16 +97,6 @@ func (f *fakeEC2WithLogin) DescribeAccountAttributes(input *ec2.DescribeAccountA
 	}, nil
 }
 
-type fakeEC2SpotInstance struct {
-	output *ec2.RequestSpotInstancesOutput
-	err    error
-	*fakeEC2
-}
-
-func (f *fakeEC2SpotInstance) RequestSpotInstances(_ *ec2.RequestSpotInstancesInput) (*ec2.RequestSpotInstancesOutput, error) {
-	return f.output, f.err
-}
-
 type fakeEC2SecurityGroupTestRecorder struct {
 	*fakeEC2
 	mock.Mock
