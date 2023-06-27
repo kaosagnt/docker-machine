@@ -1,8 +1,12 @@
 # ⚠️This is a fork of Docker Machine ⚠
 
-This is a fork of Docker Machine maintained by GitLab for [fixing critical bugs](https://docs.gitlab.com/runner/executors/docker_machine.html#forked-version-of-docker-machine). Docker Machine, which Docker has deprecated as of 2021-09-27, is the basis of the GitLab Runner Docker Machine Executor. Our plan, as discussed [here](https://gitlab.com/gitlab-org/gitlab/-/issues/341856), is to continue to maintain the fork in the near term, with a primary focus on driver maintenance for Amazon Web Services, Google Cloud Platform, Microsoft Azure.
+This is a fork of Docker Machine maintained by GitLab for [fixing critical bugs](https://docs.gitlab.com/runner/executors/docker_machine.html#forked-version-of-docker-machine). Docker Machine, which Docker has deprecated as of 2021-09-27, is the basis of the [GitLab Runner Docker Machine Executor](https://docs.gitlab.com/runner/configuration/autoscale.html). 
 
-For a new merge request to be considered, the following questions must be answered: 
+We will maintain the fork and provide support through the end of the calendar year 2024. The replacement autoscaling solution is now available as an experiment. The plan is to transition to beta and GA in the second half of the calendar year 2023.
+
+The replacement [autoscaling solution](https://docs.gitlab.com/runner/runner_autoscale/) is now available as an experiment. The plan is to transition to beta and GA in the second half of the calendar year 2023.
+
+We do not plan to add new features to the Docker Machine fork.  The intent is only to address critical bugs that can prevent CI job execution or affect running costs. For a new merge request to be considered, the following questions must be answered: 
 
   * What critical bug this MR is fixing?
   * How does this change help reduce cost of usage? What scale of cost reduction is it?
