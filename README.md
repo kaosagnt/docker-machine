@@ -2,7 +2,7 @@
 
 This is a fork of Docker Machine maintained by GitLab for [fixing critical bugs](https://docs.gitlab.com/runner/executors/docker_machine.html#forked-version-of-docker-machine). Docker Machine, which Docker has deprecated as of 2021-09-27, is the basis of the [GitLab Runner Docker Machine Executor](https://docs.gitlab.com/runner/configuration/autoscale.html). 
 
-We will maintain the fork and provide support through the end of the calendar year 2024. The replacement autoscaling solution is now available as an experiment. The plan is to transition to beta and GA in the second half of the calendar year 2023.
+We will maintain the fork and provide support through the end of the calendar year 2024.
 
 The replacement [autoscaling solution](https://docs.gitlab.com/runner/runner_autoscale/) is now available as an experiment. The plan is to transition to beta and GA in the second half of the calendar year 2023.
 
