@@ -72,9 +72,6 @@ to clean-up build results.
 
 ## Tests and validation
 
-We use the usual `go` tools for this, to run those commands you need at least the linter which you can
-install with `go get -u golang.org/x/lint/golint`
-
 To run basic validation (fmt, test-short, lint, vet), and the project unit tests, call:
 
     $ make test
