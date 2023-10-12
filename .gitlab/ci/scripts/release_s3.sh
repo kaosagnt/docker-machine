@@ -2,6 +2,9 @@
 
 set -eo pipefail
 
+LATEST_STABLE_TAG=$(git -c versionsort.prereleaseSuffix="-rc" tag -l "v*.*.*" --sort=-v:refname | awk '!/rc/' | head -n 1)
+echo "Latest stable tag is: ${LATEST_STABLE_TAG}"
+
 __aws_s3_sync() {
   local source="$1"
   local target="$2"
@@ -13,12 +16,7 @@ __aws_s3_sync() {
 
   echo -e "\033[32;1mSyncing with ${target}\033[0m"
 
-  if [[ "${DEBUG_S3_SYNC}" == "true" ]]; then
-    set -x
-  fi
-
   aws ${awsDebug} --color on s3 sync "${source}" "${target}" --acl public-read
-  set +x
 }
 
 VERSION="$(./.gitlab/ci/scripts/version.sh 2>/dev/null || echo 'dev')"
@@ -48,10 +46,6 @@ echo "Generated Index page"
 __aws_s3_sync bin "${S3_URL}"
 
 # Copy the binaries to the latest directory.
-LATEST_STABLE_TAG=$(git -c versionsort.prereleaseSuffix="-rc" tag -l "v*.*.*" --sort=-v:refname | awk '!/rc/' | head -n 1)
-
-echo "Latest stable tag is: ${LATEST_STABLE_TAG}"
-
 if git describe --exact-match --match ${LATEST_STABLE_TAG} >/dev/null 2>&1; then
   echo "Syncing the 'latest' bucket"
 
