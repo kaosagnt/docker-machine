@@ -1,6 +1,6 @@
 variables:
   USE_CONTAINER: "true"
-  CI_IMAGE: registry.gitlab.com/gitlab-org/ci-cd/docker-machine/ci:go1.21.1-alpine3.18
+  CI_IMAGE: registry.gitlab.com/gitlab-org/ci-cd/docker-machine/ci:go1.21.3-alpine3.18
   DOCKER_VERSION: "20.10.12"
 
 default:
