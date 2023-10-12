@@ -93,9 +93,11 @@ func (e ErrPluginBinaryNotFound) Error() string {
 }
 
 // driverPath finds the path of a driver binary by its name.
-//  + If the driver is a core driver, there is no separate driver binary. We reuse current binary if it's `docker-machine`
+//   - If the driver is a core driver, there is no separate driver binary. We reuse current binary if it's `docker-machine`
+//
 // or we assume `docker-machine` is in the PATH.
-//  + If the driver is NOT a core driver, then the separate binary must be in the PATH and it's name must be
+//   - If the driver is NOT a core driver, then the separate binary must be in the PATH and it's name must be
+//
 // `docker-machine-driver-driverName`
 func driverPath(driverName string) string {
 	for _, coreDriver := range CoreDrivers {

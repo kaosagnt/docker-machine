@@ -3,11 +3,7 @@ GO_LDFLAGS := -X `go list ./version`.GitCommit=`git rev-parse --short HEAD 2>/de
 GO_GCFLAGS :=
 
 # Full package list
-PKGS := $(shell go list -tags "$(BUILDTAGS)" ./... | grep -v "/vendor/" | grep -v "/cmd")
-
-# Resolving binary dependencies for specific targets
-GOLINT_BIN := $(GOPATH)/bin/golint
-GOLINT := $(shell [ -x $(GOLINT_BIN) ] && echo $(GOLINT_BIN) || echo '')
+PKGS := $(shell go list -tags "$(BUILDTAGS)" ./... | grep -v "/cmd")
 
 # Honor debug
 ifeq ($(DEBUG),true)
