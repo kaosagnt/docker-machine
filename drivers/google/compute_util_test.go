@@ -246,7 +246,7 @@ func TestWaitForOpBackOff(t *testing.T) {
 				Location: "location",
 				Message:  "message",
 			},
-			expectedError: errors.New("operation error: {code location message [] []}"),
+			expectedError: errors.New("operation error: {code [] location message [] []}"),
 		},
 		"backoff factory not defined": {
 			backoffFactoryNotDefined: true,
