@@ -15,18 +15,20 @@ require (
 	github.com/intel-go/cpuid v0.0.0-20181003105527-1a4a6f06a1c6
 	github.com/rackspace/gophercloud v1.0.1-0.20150408191457-ce0f487f6747
 	github.com/skarademir/naturalsort v0.0.0-20150715044055-69a5d87bef62
-	github.com/stretchr/testify v1.7.0
+	github.com/stretchr/testify v1.8.1
 	github.com/vmware/govcloudair v0.0.2
 	github.com/vmware/govmomi v0.6.2
-	golang.org/x/crypto v0.14.0
-	golang.org/x/net v0.17.0
-	golang.org/x/oauth2 v0.0.0-20210323180902-22b0adad7558
-	golang.org/x/sys v0.13.0
-	google.golang.org/api v0.42.0
+	golang.org/x/crypto v0.16.0
+	golang.org/x/net v0.19.0
+	golang.org/x/oauth2 v0.13.0
+	golang.org/x/sys v0.15.0
+	google.golang.org/api v0.128.0
 )
 
+require google.golang.org/genproto/googleapis/rpc v0.0.0-20231212172506-995d672761c0 // indirect
+
 require (
-	cloud.google.com/go v0.80.0 // indirect
+	cloud.google.com/go v0.110.10 // indirect
 	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/bitly/go-simplejson v0.5.1 // indirect
 	github.com/bugsnag/osext v0.0.0-20130617224835-0dd3f918b21b // indirect
@@ -37,11 +39,11 @@ require (
 	github.com/docker/go-connections v0.4.0
 	github.com/docker/go-units v0.2.1-0.20151230175859-0bbddae09c5a // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e // indirect
-	github.com/golang/protobuf v1.5.2 // indirect
+	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
+	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/google/go-querystring v0.0.0-20140804062624-30f7a39f4a21 // indirect
-	github.com/googleapis/gax-go/v2 v2.0.5 // indirect
+	github.com/googleapis/gax-go/v2 v2.12.0 // indirect
 	github.com/jinzhu/copier v0.0.0-20180308034124-7e38e58719c3 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/juju/loggo v1.0.0 // indirect
@@ -52,18 +54,18 @@ require (
 	github.com/opencontainers/image-spec v1.0.2
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/stretchr/objx v0.1.0 // indirect
+	github.com/stretchr/objx v0.5.0 // indirect
 	github.com/tent/http-link-go v0.0.0-20130702225549-ac974c61c2f9 // indirect
-	go.opencensus.io v0.23.0 // indirect
+	go.opencensus.io v0.24.0 // indirect
 	golang.org/x/mod v0.8.0 // indirect
-	golang.org/x/term v0.13.0
-	golang.org/x/text v0.13.0 // indirect
+	golang.org/x/term v0.15.0
+	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/tools v0.6.0 // indirect
-	google.golang.org/appengine v1.6.7 // indirect
-	google.golang.org/genproto v0.0.0-20210323160006-e668133fea6a // indirect
-	google.golang.org/grpc v1.36.0 // indirect
-	google.golang.org/protobuf v1.26.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20200313102051-9f266ea9e77c // indirect
+	google.golang.org/appengine v1.6.8 // indirect
+	google.golang.org/genproto v0.0.0-20231211222908-989df2bf70f3 // indirect
+	google.golang.org/grpc v1.60.1 // indirect
+	google.golang.org/protobuf v1.31.0 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.1 // indirect
 	launchpad.net/gocheck v0.0.0-20140225173054-000000000087 // indirect
 )
