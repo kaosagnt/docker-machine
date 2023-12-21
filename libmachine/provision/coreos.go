@@ -118,12 +118,9 @@ func (provisioner *CoreOSProvisioner) Provision(swarmOptions swarm.Options, auth
 		return err
 	}
 
-	if err := makeDockerOptionsDir(provisioner); err != nil {
+	if err := setupRemoteAuthOptions(provisioner); err != nil {
 		return err
 	}
-
-	log.Debugf("Preparing certificates")
-	provisioner.AuthOptions = setRemoteAuthOptions(provisioner)
 
 	log.Debugf("Setting up certificates")
 	if err := ConfigureAuth(provisioner); err != nil {

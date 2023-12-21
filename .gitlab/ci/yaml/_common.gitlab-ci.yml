@@ -1,6 +1,6 @@
 variables:
   USE_CONTAINER: "true"
-  CI_IMAGE: registry.gitlab.com/gitlab-org/ci-cd/docker-machine/ci:go1.13.15-alpine3.12-1
+  CI_IMAGE: registry.gitlab.com/gitlab-org/ci-cd/docker-machine/ci:go1.21.3-alpine3.18
   DOCKER_VERSION: "20.10.12"
 
 default:
@@ -17,3 +17,15 @@ default:
     DOCKER_TLS_CERTDIR: "/certs"
   tags:
   - gitlab-org-docker
+
+# .common:stage-done is used as a sentinel at stage n for stage n-1 completion, so we can kick off builds in later stages
+# without explicitly waiting for the completion of the n-1 stage
+.common:stage-done:
+  extends:
+  - .rules:merge-requests
+  image: alpine:latest
+  variables:
+    GIT_STRATEGY: none
+  script:
+  - echo "${CI_JOB_STAGE} done!"
+  - exit 0

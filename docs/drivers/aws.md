@@ -62,6 +62,8 @@ You can use environment variables:
 -   `--amazonec2-device-name`: The root device name of the instance.
 -   `--amazonec2-root-size`: The root disk size of the instance (in GB).
 -   `--amazonec2-volume-type`: The Amazon EBS volume type to be attached to the instance.
+-   `--amazonec2-volume-encrypted`: Encrypt Amazon EBS volume attached to the instance.
+-   `--amazonec2-volume-kms-key`: The KMS Key ID/ARN/Alias to be used to encrypt the volume.
 -   `--amazonec2-iam-instance-profile`: The AWS IAM role name to be used as the instance profile.
 -   `--amazonec2-ssh-user`: The SSH Login username, which must match the default SSH user set in the ami used.
 -   `--amazonec2-request-spot-instance`: Use spot instances.
@@ -92,6 +94,8 @@ You can use environment variables:
 | `--amazonec2-device-name`                | `AWS_DEVICE_NAME`       | `/dev/sda1`      |
 | `--amazonec2-root-size`                  | `AWS_ROOT_SIZE`         | `16`             |
 | `--amazonec2-volume-type`                | `AWS_VOLUME_TYPE`       | `gp2`            |
+| `--amazonec2-volume-encrypted`           | -                       | `false`          |
+| `--amazonec2-volume-kms-key`             | `AWS_VOLUME_KMS_KEY`    | -                |
 | `--amazonec2-iam-instance-profile`       | `AWS_INSTANCE_PROFILE`  | -                |
 | `--amazonec2-ssh-user`                   | `AWS_SSH_USER`          | `ubuntu`         |
 | `--amazonec2-request-spot-instance`      | -                       | `false`          |
@@ -115,6 +119,7 @@ By default, the Amazon EC2 driver will use the Ubuntu 20.04 image for the given 
 | ap-northeast-2 | ami-0225bc2990c54ce9a |
 | ap-northeast-3 | ami-0c2223049202ca738 |
 | ap-south-1 | ami-05ba3a39a75be1ec4 |
+| ap-south-2 | ami-0cdec4d7db18a5cdb |
 | ap-southeast-1 | ami-0750a20e9959e44ff |
 | ap-southeast-2 | ami-0d539270873f66397 |
 | ap-southeast-3 | ami-0f06496957d1fe04a |
@@ -122,11 +127,14 @@ By default, the Amazon EC2 driver will use the Ubuntu 20.04 image for the given 
 | cn-north-1 | ami-0741e7b8b4fb0001c |
 | cn-northwest-1 | ami-0883e8062ff31f727 |
 | eu-central-1 | ami-02584c1c9d05efa69 |
+| eu-central-2 | ami-0968892c976bc03f2 |
 | eu-north-1 | ami-09f0506c9ef0fb473 |
 | eu-south-1 | ami-06ea0ad3f5adc2565 |
+| eu-south-2 | ami-0d3d6b90b90290cdd |
 | eu-west-1 | ami-00e7df8df28dfa791 |
 | eu-west-2 | ami-00826bd51e68b1487 |
 | eu-west-3 | ami-0a21d1c76ac56fee7 |
+| me-central-1 | ami-04e59379df0314070 |
 | me-south-1 | ami-05b680b37c7917206 |
 | sa-east-1 | ami-077518a464c82703b |
 | us-east-1 | ami-0c4f7023847b90238 |

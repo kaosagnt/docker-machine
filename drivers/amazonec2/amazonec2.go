@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math"
 	"net"
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -49,8 +49,7 @@ const (
 )
 
 const (
-	keypairNotFoundCode             = "InvalidKeyPair.NotFound"
-	spotInstanceRequestNotFoundCode = "InvalidSpotInstanceRequestID.NotFound"
+	keypairNotFoundCode = "InvalidKeyPair.NotFound"
 )
 
 var (
@@ -98,6 +97,8 @@ type Driver struct {
 	DeviceName                    string
 	RootSize                      int64
 	VolumeType                    string
+	VolumeEncrypted               bool
+	VolumeKmsKeyId                string
 	IamInstanceProfile            string
 	VpcId                         string
 	SubnetId                      string
@@ -117,8 +118,6 @@ type Driver struct {
 	UserDataFile                  string
 	MetadataTokenSetting          string
 	MetadataTokenResponseHopLimit int64
-
-	spotInstanceRequestId string
 }
 
 type clientFactory interface {
@@ -212,6 +211,15 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "Amazon EBS volume type",
 			Value:  defaultVolumeType,
 			EnvVar: "AWS_VOLUME_TYPE",
+		},
+		mcnflag.BoolFlag{
+			Name:  "amazonec2-volume-encrypted",
+			Usage: "Set this flag to encrypt storage volume",
+		},
+		mcnflag.StringFlag{
+			Name:   "amazonec2-volume-kms-key",
+			Usage:  "Amazon EBS KMS key id/arn used to encrypt volume",
+			EnvVar: "AWS_VOLUME_KMS_KEY",
 		},
 		mcnflag.StringFlag{
 			Name:   "amazonec2-iam-instance-profile",
@@ -387,6 +395,8 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.DeviceName = flags.String("amazonec2-device-name")
 	d.RootSize = int64(flags.Int("amazonec2-root-size"))
 	d.VolumeType = flags.String("amazonec2-volume-type")
+	d.VolumeEncrypted = flags.Bool("amazonec2-volume-encrypted")
+	d.VolumeKmsKeyId = flags.String("amazonec2-volume-kms-key")
 	d.IamInstanceProfile = flags.String("amazonec2-iam-instance-profile")
 	d.SSHUser = flags.String("amazonec2-ssh-user")
 	d.SSHPort = flags.Int("amazonec2-ssh-port")
@@ -620,9 +630,6 @@ func (d *Driver) Create() error {
 
 func (d *Driver) innerCreate() error {
 	log.Infof("Launching instance...")
-
-	tagSpecifications := d.createTagSpecifications()
-
 	if err := d.createKeyPair(); err != nil {
 		return fmt.Errorf("unable to create key pair: %s", err)
 	}
@@ -643,8 +650,12 @@ func (d *Driver) innerCreate() error {
 		Ebs: &ec2.EbsBlockDevice{
 			VolumeSize:          aws.Int64(d.RootSize),
 			VolumeType:          aws.String(d.VolumeType),
+			Encrypted:           aws.Bool(d.VolumeEncrypted),
 			DeleteOnTermination: aws.Bool(true),
 		},
+	}
+	if d.VolumeKmsKeyId != "" {
+		bdm.Ebs.KmsKeyId = aws.String(d.VolumeKmsKeyId)
 	}
 	netSpecs := []*ec2.InstanceNetworkInterfaceSpecification{{
 		DeviceIndex:              aws.Int64(0), // eth0
@@ -658,131 +669,84 @@ func (d *Driver) innerCreate() error {
 
 	var instance *ec2.Instance
 
+	// As mentioned in
+	// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-requests.html#concepts-spot-instances-request-tags,
+	// when you tag a Spot Instance request, the instances and volumes that are launched by the Spot Instance request
+	// are not automatically tagged. We must explicitly tag the instances and volumes
+	// launched by the Spot Instance request once they are available
+	req := ec2.RunInstancesInput{
+		ImageId:  &d.AMI,
+		MinCount: aws.Int64(1),
+		MaxCount: aws.Int64(1),
+		Placement: &ec2.Placement{
+			AvailabilityZone: &regionZone,
+		},
+		KeyName:           &d.KeyName,
+		InstanceType:      &d.InstanceType,
+		NetworkInterfaces: netSpecs,
+		MetadataOptions: &ec2.InstanceMetadataOptionsRequest{
+			HttpTokens:              &d.MetadataTokenSetting,
+			HttpPutResponseHopLimit: &d.MetadataTokenResponseHopLimit,
+		},
+		Monitoring: &ec2.RunInstancesMonitoringEnabled{Enabled: aws.Bool(d.Monitoring)},
+		IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
+			Name: &d.IamInstanceProfile,
+		},
+		EbsOptimized:        &d.UseEbsOptimizedInstance,
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{bdm},
+		UserData:            &userdata,
+	}
 	if d.RequestSpotInstance {
-		req := ec2.RequestSpotInstancesInput{
-			TagSpecifications: tagSpecifications,
-			LaunchSpecification: &ec2.RequestSpotLaunchSpecification{
-				ImageId: &d.AMI,
-				Placement: &ec2.SpotPlacement{
-					AvailabilityZone: &regionZone,
-				},
-				KeyName:           &d.KeyName,
-				InstanceType:      &d.InstanceType,
-				NetworkInterfaces: netSpecs,
-				Monitoring:        &ec2.RunInstancesMonitoringEnabled{Enabled: aws.Bool(d.Monitoring)},
-				IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
-					Name: &d.IamInstanceProfile,
-				},
-				EbsOptimized:        &d.UseEbsOptimizedInstance,
-				BlockDeviceMappings: []*ec2.BlockDeviceMapping{bdm},
-				UserData:            &userdata,
+		req.InstanceMarketOptions = &ec2.InstanceMarketOptionsRequest{
+			MarketType: aws.String("spot"),
+			SpotOptions: &ec2.SpotMarketOptions{
+				MaxPrice: &d.SpotPrice,
 			},
-			InstanceCount: aws.Int64(1),
-			SpotPrice:     &d.SpotPrice,
 		}
 		if d.BlockDurationMinutes != 0 {
-			req.BlockDurationMinutes = &d.BlockDurationMinutes
-		}
-
-		spotInstanceRequest, err := d.getClient().RequestSpotInstances(&req)
-		if err != nil {
-			return fmt.Errorf("Error request spot instance: %v", err)
-		}
-		if spotInstanceRequest == nil || len((*spotInstanceRequest).SpotInstanceRequests) < 1 {
-			return fmt.Errorf("error requesting spot instance: %v", errorUnprocessableResponse)
-		}
-		d.spotInstanceRequestId = *spotInstanceRequest.SpotInstanceRequests[0].SpotInstanceRequestId
-
-		log.Info("Waiting for spot instance...")
-		for i := 0; i < 3; i++ {
-			// AWS eventual consistency means we could not have SpotInstanceRequest ready yet
-			err = d.getClient().WaitUntilSpotInstanceRequestFulfilled(&ec2.DescribeSpotInstanceRequestsInput{
-				SpotInstanceRequestIds: []*string{&d.spotInstanceRequestId},
-			})
-			if err != nil {
-				if awsErr, ok := err.(awserr.Error); ok {
-					if awsErr.Code() == spotInstanceRequestNotFoundCode {
-						time.Sleep(5 * time.Second)
-						continue
-					}
-				}
-				return fmt.Errorf("Error fulfilling spot request: %v", err)
-			}
-			break
-		}
-		log.Infof("Created spot instance request %v", d.spotInstanceRequestId)
-		// resolve instance id
-		for i := 0; i < 3; i++ {
-			// Even though the waiter succeeded, eventual consistency means we could
-			// get a describe output that does not include this information. Try a
-			// few times just in case
-			var resolvedSpotInstance *ec2.DescribeSpotInstanceRequestsOutput
-			resolvedSpotInstance, err = d.getClient().DescribeSpotInstanceRequests(&ec2.DescribeSpotInstanceRequestsInput{
-				SpotInstanceRequestIds: []*string{&d.spotInstanceRequestId},
-			})
-			if err != nil {
-				// Unexpected; no need to retry
-				return fmt.Errorf("Error describing previously made spot instance request: %v", err)
-			}
-			if resolvedSpotInstance == nil || len((*resolvedSpotInstance).SpotInstanceRequests) < 1 {
-				return fmt.Errorf("Error describing spot instance: %v", errorUnprocessableResponse)
-			}
-
-			maybeInstanceId := resolvedSpotInstance.SpotInstanceRequests[0].InstanceId
-			if maybeInstanceId != nil {
-				var instances *ec2.DescribeInstancesOutput
-				instances, err = d.getClient().DescribeInstances(&ec2.DescribeInstancesInput{
-					InstanceIds: []*string{maybeInstanceId},
-				})
-				if err != nil {
-					// Retry if we get an id from spot instance but EC2 doesn't recognize it yet; see above, eventual consistency possible
-					continue
-				}
-				instance = instances.Reservations[0].Instances[0]
-				err = nil
-				break
-			}
-			time.Sleep(5 * time.Second)
-		}
-
-		if err != nil {
-			return fmt.Errorf("Error resolving spot instance to real instance: %v", err)
+			req.InstanceMarketOptions.SpotOptions.BlockDurationMinutes = &d.BlockDurationMinutes
 		}
 	} else {
-		inst, err := d.getClient().RunInstances(&ec2.RunInstancesInput{
-			TagSpecifications: tagSpecifications,
-			ImageId:           &d.AMI,
-			MinCount:          aws.Int64(1),
-			MaxCount:          aws.Int64(1),
-			Placement: &ec2.Placement{
-				AvailabilityZone: &regionZone,
-			},
-			KeyName:           &d.KeyName,
-			InstanceType:      &d.InstanceType,
-			NetworkInterfaces: netSpecs,
-			MetadataOptions: &ec2.InstanceMetadataOptionsRequest{
-				HttpTokens:              &d.MetadataTokenSetting,
-				HttpPutResponseHopLimit: &d.MetadataTokenResponseHopLimit,
-			},
-			Monitoring: &ec2.RunInstancesMonitoringEnabled{Enabled: aws.Bool(d.Monitoring)},
-			IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
-				Name: &d.IamInstanceProfile,
-			},
-			EbsOptimized:        &d.UseEbsOptimizedInstance,
-			BlockDeviceMappings: []*ec2.BlockDeviceMapping{bdm},
-			UserData:            &userdata,
-		})
-
-		if err != nil {
-			return fmt.Errorf("Error launching instance: %v", err)
-		}
-		if inst == nil || len(inst.Instances) < 1 {
-			return fmt.Errorf("error launching instance: %v", errorUnprocessableResponse)
-		}
-		instance = inst.Instances[0]
+		req.TagSpecifications = d.createTagSpecifications()
 	}
 
+	inst, err := d.getClient().RunInstances(&req)
+
+	if err != nil {
+		return fmt.Errorf("Error launching instance: %v", err)
+	}
+	if inst == nil || len(inst.Instances) < 1 {
+		return fmt.Errorf("error launching instance: %v", errorUnprocessableResponse)
+	}
+	instance = inst.Instances[0]
+
 	d.InstanceId = *instance.InstanceId
+
+	if d.RequestSpotInstance && d.InstanceId != "" {
+		// According to this AWS Example,
+		// https://docs.aws.amazon.com/sdk-for-go/v1/developer-guide/ec2-example-create-images.html
+		// You can add up to 10 tags to an instance in a single CreateTags operation
+		tags := d.createTags()
+		for {
+			end := int(math.Min(float64(10), float64(len(tags))))
+			t := tags[:end]
+
+			req := ec2.CreateTagsInput{
+				Resources: []*string{instance.InstanceId},
+				Tags:      t,
+			}
+			_, err := d.getClient().CreateTags(&req)
+			if err != nil {
+				return fmt.Errorf("Error setting tags for the spot instance: %v", err)
+			}
+
+			tags = tags[end:]
+
+			if len(tags) == 0 {
+				break
+			}
+		}
+	}
 
 	log.Debug("waiting for ip address to become available")
 	if err := mcnutils.WaitFor(d.instanceIpAvailable); err != nil {
@@ -951,14 +915,6 @@ func (d *Driver) Remove() error {
 		multierr.Errs = append(multierr.Errs, err)
 	}
 
-	// In case of failure waiting for a SpotInstance, we must cancel the unfulfilled request, otherwise an instance may be created later.
-	// If the instance was created, terminating it will be enough for canceling the SpotInstanceRequest
-	if d.RequestSpotInstance && d.spotInstanceRequestId != "" {
-		if err := d.cancelSpotInstanceRequest(); err != nil {
-			multierr.Errs = append(multierr.Errs, err)
-		}
-	}
-
 	if !d.ExistingKey {
 		if err := d.deleteKeyPair(); err != nil {
 			multierr.Errs = append(multierr.Errs, err)
@@ -970,15 +926,6 @@ func (d *Driver) Remove() error {
 	}
 
 	return multierr
-}
-
-func (d *Driver) cancelSpotInstanceRequest() error {
-	// NB: Canceling a Spot instance request does not terminate running Spot instances associated with the request
-	_, err := d.getClient().CancelSpotInstanceRequests(&ec2.CancelSpotInstanceRequestsInput{
-		SpotInstanceRequestIds: []*string{&d.spotInstanceRequestId},
-	})
-
-	return err
 }
 
 func (d *Driver) getInstance() (*ec2.Instance, error) {
@@ -1102,6 +1049,24 @@ func (d *Driver) securityGroupAvailableFunc(id string) func() bool {
 }
 
 func (d *Driver) createTagSpecifications() []*ec2.TagSpecification {
+	tags := d.createTags()
+	return []*ec2.TagSpecification{
+		{
+			ResourceType: aws.String("instance"),
+			Tags:         tags,
+		},
+		{
+			ResourceType: aws.String("volume"),
+			Tags:         tags,
+		},
+		{
+			ResourceType: aws.String("network-interface"),
+			Tags:         tags,
+		},
+	}
+}
+
+func (d *Driver) createTags() []*ec2.Tag {
 	var tags []*ec2.Tag
 	tags = append(tags, &ec2.Tag{
 		Key:   aws.String("Name"),
@@ -1121,20 +1086,7 @@ func (d *Driver) createTagSpecifications() []*ec2.TagSpecification {
 		}
 	}
 
-	return []*ec2.TagSpecification{
-		{
-			ResourceType: aws.String("instance"),
-			Tags:         tags,
-		},
-		{
-			ResourceType: aws.String("volume"),
-			Tags:         tags,
-		},
-		{
-			ResourceType: aws.String("network-interface"),
-			Tags:         tags,
-		},
-	}
+	return tags
 }
 
 func (d *Driver) getTagResources() []*string {

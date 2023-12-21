@@ -11,11 +11,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/docker/docker/pkg/term"
 	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/mcnutils"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/terminal"
+	"golang.org/x/term"
 )
 
 type Client interface {
@@ -293,7 +293,7 @@ func (client *NativeClient) Shell(args ...string) error {
 		ssh.ECHO: 1,
 	}
 
-	fd := os.Stdin.Fd()
+	fd := int(os.Stdin.Fd())
 
 	if term.IsTerminal(fd) {
 		oldState, err := term.MakeRaw(fd)
@@ -301,15 +301,15 @@ func (client *NativeClient) Shell(args ...string) error {
 			return err
 		}
 
-		defer term.RestoreTerminal(fd, oldState)
+		defer term.Restore(fd, oldState)
 
-		winsize, err := term.GetWinsize(fd)
+		width, height, err := term.GetSize(fd)
 		if err != nil {
 			termWidth = 80
 			termHeight = 24
 		} else {
-			termWidth = int(winsize.Width)
-			termHeight = int(winsize.Height)
+			termWidth = width
+			termHeight = height
 		}
 	}
 

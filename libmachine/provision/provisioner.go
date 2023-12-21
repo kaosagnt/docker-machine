@@ -50,6 +50,9 @@ type Provisioner interface {
 	// Return the auth options used to configure remote connection for the daemon.
 	GetAuthOptions() auth.Options
 
+	// Set auth options used to configure remote connection for the daemon.
+	SetAuthOptions(opts auth.Options)
+
 	// Get the swarm options associated with this host.
 	GetSwarmOptions() swarm.Options
 

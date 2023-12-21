@@ -39,60 +39,6 @@ func TestConfigureSecurityGroupPermissionsEmpty(t *testing.T) {
 	assert.Len(t, perms, 2)
 }
 
-func setupTestFailedSpotInstanceRequest(t *testing.T, r *ec2.RequestSpotInstancesOutput) (*Driver, func()) {
-	dir, _ := ioutil.TempDir("", "awsuserdata")
-	privKeyPath := filepath.Join(dir, "key")
-	pubKeyPath := filepath.Join(dir, "key.pub")
-
-	content := []byte("test\n")
-	err := ioutil.WriteFile(privKeyPath, content, 0666)
-	assert.NoError(t, err)
-	err = ioutil.WriteFile(pubKeyPath, content, 0666)
-	assert.NoError(t, err)
-
-	driver := NewDriver("machineFoo", "path")
-	driver.clientFactory = func() Ec2Client {
-		return &fakeEC2SpotInstance{
-			output: r,
-			err:    nil,
-		}
-	}
-
-	driver.SecurityGroupNames = []string{}
-
-	driver.SSHPrivateKeyPath = privKeyPath
-	driver.SSHKeyPath = pubKeyPath
-	driver.KeyName = "foo"
-
-	driver.RequestSpotInstance = true
-
-	return driver, func() {
-		os.RemoveAll(dir)
-	}
-}
-
-func TestFailedSpotInstanceRequest(t *testing.T) {
-	var failureScenarios = []struct {
-		requestResult *ec2.RequestSpotInstancesOutput
-	}{
-		{requestResult: nil},
-		{
-			requestResult: &ec2.RequestSpotInstancesOutput{
-				SpotInstanceRequests: []*ec2.SpotInstanceRequest{},
-			},
-		},
-	}
-
-	for _, tt := range failureScenarios {
-		driver, cleanup := setupTestFailedSpotInstanceRequest(t, tt.requestResult)
-		defer cleanup()
-
-		err := driver.innerCreate()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), errorUnprocessableResponse.Error())
-	}
-}
-
 func TestConfigureSecurityGroupPermissionsSshOnly(t *testing.T) {
 	driver := NewTestDriver()
 	group := securityGroup
@@ -243,7 +189,7 @@ func TestValidateAwsRegionValid(t *testing.T) {
 }
 
 func TestValidateAwsRegionInvalid(t *testing.T) {
-	regions := []string{"eu-central-2"}
+	regions := []string{"eu-invalid-2"}
 
 	for _, region := range regions {
 		_, err := validateAwsRegion(region)

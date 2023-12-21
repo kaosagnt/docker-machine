@@ -1,21 +1,21 @@
-//Package provisiontest provides utilities for testing provisioners
+// Package provisiontest provides utilities for testing provisioners
 package provisiontest
 
 import "errors"
 
-//FakeSSHCommanderOptions is intended to create a FakeSSHCommander without actually knowing the underlying sshcommands by passing it to NewSSHCommander
+// FakeSSHCommanderOptions is intended to create a FakeSSHCommander without actually knowing the underlying sshcommands by passing it to NewSSHCommander
 type FakeSSHCommanderOptions struct {
 	//Result of the ssh command to look up the FilesystemType
 	FilesystemType string
 }
 
-//FakeSSHCommander is an implementation of provision.SSHCommander to provide predictable responses set by testing code
-//Extend it when needed
+// FakeSSHCommander is an implementation of provision.SSHCommander to provide predictable responses set by testing code
+// Extend it when needed
 type FakeSSHCommander struct {
 	Responses map[string]string
 }
 
-//NewFakeSSHCommander creates a FakeSSHCommander without actually knowing the underlying sshcommands
+// NewFakeSSHCommander creates a FakeSSHCommander without actually knowing the underlying sshcommands
 func NewFakeSSHCommander(options FakeSSHCommanderOptions) *FakeSSHCommander {
 	if options.FilesystemType == "" {
 		options.FilesystemType = "ext4"
@@ -29,7 +29,7 @@ func NewFakeSSHCommander(options FakeSSHCommanderOptions) *FakeSSHCommander {
 	return sshCmder
 }
 
-//SSHCommand is an implementation of provision.SSHCommander.SSHCommand to provide predictable responses set by testing code
+// SSHCommand is an implementation of provision.SSHCommander.SSHCommand to provide predictable responses set by testing code
 func (sshCmder *FakeSSHCommander) SSHCommand(args string) (string, error) {
 	response, commandRegistered := sshCmder.Responses[args]
 	if !commandRegistered {

@@ -89,8 +89,9 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 		return err
 	}
 
-	log.Debugf("Preparing remote auth options")
-	p.AuthOptions = setRemoteAuthOptions(p)
+	if err := setupRemoteAuthOptions(p); err != nil {
+		return err
+	}
 
 	log.Debug("Configuring auth")
 	err = ConfigureAuth(p)

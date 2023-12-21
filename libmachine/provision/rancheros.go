@@ -127,8 +127,9 @@ func (provisioner *RancherProvisioner) Provision(swarmOptions swarm.Options, aut
 		}
 	}
 
-	log.Debugf("Preparing certificates")
-	provisioner.AuthOptions = setRemoteAuthOptions(provisioner)
+	if err := setupRemoteAuthOptions(provisioner); err != nil {
+		return err
+	}
 
 	log.Debugf("Setting up certificates")
 	if err := ConfigureAuth(provisioner); err != nil {

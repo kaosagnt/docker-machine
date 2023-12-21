@@ -34,7 +34,20 @@ func installDockerGeneric(p Provisioner, baseURL string) error {
 	return nil
 }
 
+func setupRemoteAuthOptions(p Provisioner) error {
+	err := makeDockerOptionsDir(p)
+	if err != nil {
+		return fmt.Errorf("(re)creating /etc/docker directory: %v", err)
+	}
+
+	p.SetAuthOptions(setRemoteAuthOptions(p))
+
+	return nil
+}
+
 func makeDockerOptionsDir(p Provisioner) error {
+	log.Debugf("(Re)creating /etc/docker if needed")
+
 	dockerDir := p.GetDockerOptionsDir()
 	if _, err := p.SSHCommand(fmt.Sprintf("sudo mkdir -p %s", dockerDir)); err != nil {
 		return err
@@ -44,6 +57,8 @@ func makeDockerOptionsDir(p Provisioner) error {
 }
 
 func setRemoteAuthOptions(p Provisioner) auth.Options {
+	log.Debugf("Preparing certificates")
+
 	dockerDir := p.GetDockerOptionsDir()
 	authOptions := p.GetAuthOptions()
 
