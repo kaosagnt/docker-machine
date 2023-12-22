@@ -1,4 +1,4 @@
-module github.com/kaosagnt/docker-machine
+module github.com/docker/machine
 
 go 1.20
 
