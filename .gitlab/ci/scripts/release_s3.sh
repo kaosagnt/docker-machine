@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-set -eo pipefail
-
-LATEST_STABLE_TAG=$(git -c versionsort.prereleaseSuffix="-rc" tag -l "v*.*.*" --sort=-v:refname | awk '!/rc/' | head -n 1)
+LATEST_STABLE_TAG=$(git -c versionsort.suffix="-rc" tag -l "v*.*.*" --sort=-v:refname | awk '!/rc/' | head -n 1)
 echo "Latest stable tag is: ${LATEST_STABLE_TAG}"
+
+set -eo pipefail
 
 __aws_s3_sync() {
   local source="$1"
