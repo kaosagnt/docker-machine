@@ -118,6 +118,7 @@ type Driver struct {
 	UserDataFile                  string
 	MetadataTokenSetting          string
 	MetadataTokenResponseHopLimit int64
+	CreditSpecification           string
 }
 
 type clientFactory interface {
@@ -309,6 +310,10 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage: "The number of network hops that the metadata token can travel",
 			Value: defaultMetadataTokenResponseHopLimit,
 		},
+		mcnflag.StringFlag{
+			Name:  "amazonec2-credit-specification",
+			Usage: "The credit option for CPU usage (unlimited or standard)",
+		},
 	}
 }
 
@@ -414,6 +419,7 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.MetadataTokenSetting = flags.String("amazonec2-metadata-token")
 	d.MetadataTokenResponseHopLimit = int64(flags.Int("amazonec2-metadata-token-response-hop-limit"))
 	d.DisableSSL = flags.Bool("amazonec2-insecure-transport")
+	d.CreditSpecification = strings.TrimSpace(flags.String("amazonec2-credit-specification"))
 
 	if d.DisableSSL && d.Endpoint == "" {
 		return errorDisableSSLWithoutCustomEndpoint
@@ -695,6 +701,11 @@ func (d *Driver) innerCreate() error {
 		EbsOptimized:        &d.UseEbsOptimizedInstance,
 		BlockDeviceMappings: []*ec2.BlockDeviceMapping{bdm},
 		UserData:            &userdata,
+	}
+	if d.CreditSpecification != "" {
+		req.CreditSpecification = &ec2.CreditSpecificationRequest{
+			CpuCredits: &d.CreditSpecification,
+		}
 	}
 	if d.RequestSpotInstance {
 		req.InstanceMarketOptions = &ec2.InstanceMarketOptionsRequest{
