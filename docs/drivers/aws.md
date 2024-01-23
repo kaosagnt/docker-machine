@@ -74,6 +74,7 @@ You can use environment variables:
 -   `--amazonec2-use-ebs-optimized-instance`: Create an EBS Optimized Instance, instance type must support it.
 -   `--amazonec2-ssh-keypath`: Path to Private Key file to use for instance. Matching public key with .pub extension should exist
 -   `--amazonec2-retries`:  Set retry count for recoverable failures (use -1 to disable)
+-   `--amazonec2-credit-specification`: The credit option for CPU usage of the instance. Valid values: `standard`, `unlimited`. Defaults to [what AWS sets for the instance type](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/burstable-performance-instances-unlimited-mode.html). Only supported on [burstable instance types](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/burstable-performance-instances.html#burstable-instance-types)
 
 
 #### Environment variables and default values:
@@ -106,6 +107,7 @@ You can use environment variables:
 | `--amazonec2-use-ebs-optimized-instance` | -                       | `false`          |
 | `--amazonec2-ssh-keypath`                | `AWS_SSH_KEYPATH`       | -                |
 | `--amazonec2-retries`                    | -                       | `5`              |
+| `--amazonec2-credit-specification`       | -                       | -                |
 
 ## Default AMIs
 
