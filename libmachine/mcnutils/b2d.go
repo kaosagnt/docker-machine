@@ -313,8 +313,8 @@ func (b *b2dISO) version() (string, error) {
 	}
 
 	// Original magic file string looks similar to this: "Boot2Docker-v0.1.0              "
-	// This will return "v0.1.0" given the above string
-	vers := trimmedVersion[versionIndex+1:]
+	// This will return "0.1.0" given the above string
+	vers := trimmedVersion[versionIndex+2:]
 
 	log.Debug("local Boot2Docker ISO version: ", vers)
 	return vers, nil
