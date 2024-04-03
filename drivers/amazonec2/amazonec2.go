@@ -38,6 +38,8 @@ const (
 	defaultDeviceName                    = "/dev/sda1"
 	defaultRootSize                      = 16
 	defaultVolumeType                    = "gp2"
+	gp3MinimalVolumeIops                 = 3000
+	gp3MinimalVolumeThroughput           = 125
 	defaultZone                          = "a"
 	defaultSecurityGroup                 = machineSecurityGroupName
 	defaultSSHPort                       = 22
@@ -97,6 +99,8 @@ type Driver struct {
 	DeviceName                    string
 	RootSize                      int64
 	VolumeType                    string
+	VolumeIops                    int64
+	VolumeThroughput              int64
 	VolumeEncrypted               bool
 	VolumeKmsKeyId                string
 	IamInstanceProfile            string
@@ -212,6 +216,16 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "Amazon EBS volume type",
 			Value:  defaultVolumeType,
 			EnvVar: "AWS_VOLUME_TYPE",
+		},
+		mcnflag.IntFlag{
+			Name:   "amazonec2-volume-iops",
+			Usage:  "AWS EBS volume IOPS",
+			EnvVar: "AWS_VOLUME_IOPS",
+		},
+		mcnflag.IntFlag{
+			Name:   "amazonec2-volume-throughput",
+			Usage:  "AWS EBS volume throughput",
+			EnvVar: "AWS_VOLUME_THROUGHPUT",
 		},
 		mcnflag.BoolFlag{
 			Name:  "amazonec2-volume-encrypted",
@@ -400,6 +414,8 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.DeviceName = flags.String("amazonec2-device-name")
 	d.RootSize = int64(flags.Int("amazonec2-root-size"))
 	d.VolumeType = flags.String("amazonec2-volume-type")
+	d.VolumeIops = int64(flags.Int("amazonec2-volume-iops"))
+	d.VolumeThroughput = int64(flags.Int("amazonec2-volume-throughput"))
 	d.VolumeEncrypted = flags.Bool("amazonec2-volume-encrypted")
 	d.VolumeKmsKeyId = flags.String("amazonec2-volume-kms-key")
 	d.IamInstanceProfile = flags.String("amazonec2-iam-instance-profile")
@@ -651,14 +667,24 @@ func (d *Driver) innerCreate() error {
 		userdata = b64
 	}
 
+	ebsVolume := &ec2.EbsBlockDevice{
+		VolumeSize:          aws.Int64(d.RootSize),
+		VolumeType:          aws.String(d.VolumeType),
+		Encrypted:           aws.Bool(d.VolumeEncrypted),
+		DeleteOnTermination: aws.Bool(true),
+	}
+
+	switch d.VolumeType {
+	case "io1", "io2":
+		ebsVolume.Iops = aws.Int64(d.VolumeIops)
+	case "gp3":
+		ebsVolume.Iops = aws.Int64(clamp(d.VolumeIops, gp3MinimalVolumeIops, math.MaxInt64))
+		ebsVolume.Throughput = aws.Int64(clamp(d.VolumeThroughput, gp3MinimalVolumeThroughput, math.MaxInt64))
+	}
+
 	bdm := &ec2.BlockDeviceMapping{
 		DeviceName: aws.String(d.DeviceName),
-		Ebs: &ec2.EbsBlockDevice{
-			VolumeSize:          aws.Int64(d.RootSize),
-			VolumeType:          aws.String(d.VolumeType),
-			Encrypted:           aws.Bool(d.VolumeEncrypted),
-			DeleteOnTermination: aws.Bool(true),
-		},
+		Ebs:        ebsVolume,
 	}
 	if d.VolumeKmsKeyId != "" {
 		bdm.Ebs.KmsKeyId = aws.String(d.VolumeKmsKeyId)
@@ -1309,4 +1335,16 @@ func generateId() string {
 	h := md5.New()
 	io.WriteString(h, string(rb))
 	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// clamp clamps n to the range [bottom, top]
+func clamp[T ~int | ~int8 | ~int16 | ~int32 | ~int64 | ~float32 | ~float64](n, bottom, top T) T {
+	switch {
+	case n < bottom:
+		return bottom
+	case n > top:
+		return top
+	default:
+		return n
+	}
 }
