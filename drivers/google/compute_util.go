@@ -57,6 +57,11 @@ const (
 	firewallTargetTag = "docker-machine"
 )
 
+var (
+	networkRegex        = regexp.MustCompile(`/networks/`)
+	networkProjectRegex = regexp.MustCompile(apiURL + `(?P<project_name>[^/]+)/global/networks/(?P<network_name>[A-Za-z-]+)`)
+)
+
 // NewComputeUtil creates and initializes a ComputeUtil.
 func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 	client, err := google.DefaultClient(oauth2.NoContext, raw.ComputeScope)
@@ -73,7 +78,6 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 	// url we will override with the ones specified inside it. This will allow to setup runners in a project with a
 	// shared network
 	networkProject := driver.Project
-	networkProjectRegex := regexp.MustCompile(apiURL + `(?P<project_name>[^/]+)/global/networks/(?P<network_name>[A-Za-z-]+)`)
 	if matches := networkProjectRegex.FindStringSubmatch(driver.Network); len(matches) > 0 {
 		networkProject = matches[1]
 	}
@@ -259,13 +263,11 @@ func (c *ComputeUtil) openFirewallPorts(d *Driver) error {
 
 	if rule == nil {
 		create = true
-		var net string
-		networkRegex := regexp.MustCompile(`/networks/`)
-		if networkRegex.Match(d.Network) {
+		net := c.globalURL + "/networks/" + d.Network
+		if networkRegex.MatchString(d.Network) {
 			net = d.Network
-		} else {
-			net = c.globalURL + "/networks/" + d.Network
 		}
+
 		rule = &raw.Firewall{
 			Name:         firewallRule,
 			Allowed:      []*raw.FirewallAllowed{},
