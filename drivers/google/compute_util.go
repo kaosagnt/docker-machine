@@ -30,6 +30,7 @@ type ComputeUtil struct {
 	project           string
 	diskTypeURL       string
 	address           string
+	networkProject    string
 	network           string
 	subnetwork        string
 	preemptible       bool
@@ -56,6 +57,11 @@ const (
 	firewallTargetTag = "docker-machine"
 )
 
+var (
+	networkRegex        = regexp.MustCompile(`/networks/`)
+	networkProjectRegex = regexp.MustCompile(apiURL + `(?P<project_name>[^/]+)/global/networks/(?P<network_name>[A-Za-z-]+)`)
+)
+
 // NewComputeUtil creates and initializes a ComputeUtil.
 func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 	client, err := google.DefaultClient(oauth2.NoContext, raw.ComputeScope)
@@ -68,6 +74,14 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		return nil, err
 	}
 
+	// networkProject is equals to the main project set for the driver, but if the network property is a complete api
+	// url we will override with the ones specified inside it. This will allow to setup runners in a project with a
+	// shared network
+	networkProject := driver.Project
+	if matches := networkProjectRegex.FindStringSubmatch(driver.Network); len(matches) > 0 {
+		networkProject = matches[1]
+	}
+
 	return &ComputeUtil{
 		zone:                    driver.Zone,
 		instanceName:            driver.MachineName,
@@ -75,6 +89,7 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		project:                 driver.Project,
 		diskTypeURL:             driver.DiskType,
 		address:                 driver.Address,
+		networkProject:          networkProject,
 		network:                 driver.Network,
 		subnetwork:              driver.Subnetwork,
 		preemptible:             driver.Preemptible,
@@ -187,7 +202,8 @@ func (c *ComputeUtil) region() string {
 }
 
 func (c *ComputeUtil) firewallRule() (*raw.Firewall, error) {
-	return c.service.Firewalls.Get(c.project, firewallRule).Do()
+	log.Infof("Getting firewall rule in project %s", c.networkProject)
+	return c.service.Firewalls.Get(c.networkProject, firewallRule).Do()
 }
 
 func missingOpenedPorts(rule *raw.Firewall, ports []string) map[string][]string {
@@ -247,12 +263,17 @@ func (c *ComputeUtil) openFirewallPorts(d *Driver) error {
 
 	if rule == nil {
 		create = true
+		net := c.globalURL + "/networks/" + d.Network
+		if networkRegex.MatchString(d.Network) {
+			net = d.Network
+		}
+
 		rule = &raw.Firewall{
 			Name:         firewallRule,
 			Allowed:      []*raw.FirewallAllowed{},
 			SourceRanges: []string{"0.0.0.0/0"},
 			TargetTags:   []string{firewallTargetTag},
-			Network:      c.globalURL + "/networks/" + d.Network,
+			Network:      net,
 		}
 	}
 
@@ -274,9 +295,9 @@ func (c *ComputeUtil) openFirewallPorts(d *Driver) error {
 
 	var op *raw.Operation
 	if create {
-		op, err = c.service.Firewalls.Insert(c.project, rule).Do()
+		op, err = c.service.Firewalls.Insert(c.networkProject, rule).Do()
 	} else {
-		op, err = c.service.Firewalls.Update(c.project, firewallRule, rule).Do()
+		op, err = c.service.Firewalls.Update(c.networkProject, firewallRule, rule).Do()
 	}
 
 	if err != nil {
@@ -359,7 +380,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 	if strings.Contains(c.subnetwork, "/subnetworks/") {
 		instance.NetworkInterfaces[0].Subnetwork = c.subnetwork
 	} else if c.subnetwork != "" {
-		instance.NetworkInterfaces[0].Subnetwork = "projects/" + c.project + "/regions/" + c.region() + "/subnetworks/" + c.subnetwork
+		instance.NetworkInterfaces[0].Subnetwork = "projects/" + c.networkProject + "/regions/" + c.region() + "/subnetworks/" + c.subnetwork
 	}
 
 	if !c.useInternalIPOnly {
