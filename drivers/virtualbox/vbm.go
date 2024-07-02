@@ -27,6 +27,7 @@ var (
 	reEqualLine       = regexp.MustCompile(`(.+)=(.*)`)
 	reEqualQuoteLine  = regexp.MustCompile(`"(.+)"="(.*)"`)
 	reMachineNotFound = regexp.MustCompile(`Could not find a registered machine named '(.+)'`)
+	reVersion         = regexp.MustCompile(`(?:^|\n)(?P<Major>\d+)\.(?P<Minor>\d+)(\.(?P<Patch>\d.*))?`)
 
 	ErrMachineNotExist = errors.New("machine does not exist")
 	ErrVBMNotFound     = errors.New("VBoxManage not found. Make sure VirtualBox is installed and VBoxManage is in the path")
@@ -110,8 +111,12 @@ func (v *VBoxCmdManager) vbmOutErrRetry(retry int, args ...string) (string, stri
 
 func checkVBoxManageVersion(version string) error {
 	major, minor, err := parseVersion(version)
-	if (err != nil) || (major < 4) || (major == 4 && minor <= 2) {
-		return fmt.Errorf("We support Virtualbox starting with version 5. Your VirtualBox install is %q. Please upgrade at https://www.virtualbox.org", version)
+	if err != nil {
+		return err
+	}
+
+	if (major < 4) || (major == 4 && minor <= 2) {
+		return fmt.Errorf("We support Virtualbox starting with version 5. Your VirtualBox install is %d.%d. Please upgrade at https://www.virtualbox.org", major, minor)
 	}
 
 	if major < 5 {
@@ -121,23 +126,18 @@ func checkVBoxManageVersion(version string) error {
 	return nil
 }
 
-func parseVersion(version string) (int, int, error) {
-	parts := strings.Split(version, ".")
-	if len(parts) < 2 {
-		return 0, 0, fmt.Errorf("Invalid version: %q", version)
+func parseVersion(versionOutput string) (int, int, error) {
+	tokens := reVersion.FindStringSubmatch(versionOutput)
+
+	if len(tokens) <= 3 {
+		return 0, 0, fmt.Errorf("Failed to parse Virtualbox version: %q", versionOutput)
 	}
 
-	major, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, fmt.Errorf("Invalid version: %q", version)
-	}
+	// tokens 1 and 2 are guaranteed by the regex to be digits
+	major, _ := strconv.Atoi(tokens[1])
+	minor, _ := strconv.Atoi(tokens[2])
 
-	minor, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, 0, fmt.Errorf("Invalid version: %q", version)
-	}
-
-	return major, minor, err
+	return major, minor, nil
 }
 
 func parseKeyValues(stdOut string, regexp *regexp.Regexp, callback func(key, val string) error) error {
