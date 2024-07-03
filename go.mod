@@ -10,7 +10,7 @@ require (
 	github.com/cenkalti/backoff v0.0.0-20141124221459-9831e1e25c87
 	github.com/codegangsta/cli v1.11.1-0.20151120215642-0302d3914d2a
 	github.com/digitalocean/godo v1.0.1-0.20170317202744-d59ed2fe842b
-	github.com/docker/docker v24.0.5+incompatible
+	github.com/docker/docker v24.0.9+incompatible
 	github.com/exoscale/egoscale v0.9.23
 	github.com/intel-go/cpuid v0.0.0-20181003105527-1a4a6f06a1c6
 	github.com/rackspace/gophercloud v1.0.1-0.20150408191457-ce0f487f6747
