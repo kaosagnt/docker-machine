@@ -1,6 +1,6 @@
 module github.com/docker/machine
 
-go 1.22
+go 1.21
 
 require (
 	github.com/Azure/azure-sdk-for-go v5.0.0-beta+incompatible
