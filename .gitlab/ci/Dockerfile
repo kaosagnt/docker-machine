@@ -1,6 +1,3 @@
-FROM golang:1.21.8-alpine3.18
+FROM golang:1.22.5-alpine3.20
 
-# Force build - 2022-10-03T17:42:00+0000
-RUN apk add --no-cache make git py-pip bash curl && \
-    pip install awscli
-
+RUN apk add --no-cache aws-cli make git bash curl

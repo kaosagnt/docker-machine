@@ -1,6 +1,6 @@
 module github.com/docker/machine
 
-go 1.20
+go 1.22
 
 require (
 	github.com/Azure/azure-sdk-for-go v5.0.0-beta+incompatible
@@ -10,7 +10,7 @@ require (
 	github.com/cenkalti/backoff v0.0.0-20141124221459-9831e1e25c87
 	github.com/codegangsta/cli v1.11.1-0.20151120215642-0302d3914d2a
 	github.com/digitalocean/godo v1.0.1-0.20170317202744-d59ed2fe842b
-	github.com/docker/docker v24.0.5+incompatible
+	github.com/docker/docker v24.0.9+incompatible
 	github.com/exoscale/egoscale v0.9.23
 	github.com/intel-go/cpuid v0.0.0-20181003105527-1a4a6f06a1c6
 	github.com/rackspace/gophercloud v1.0.1-0.20150408191457-ce0f487f6747
@@ -18,12 +18,14 @@ require (
 	github.com/stretchr/testify v1.8.1
 	github.com/vmware/govcloudair v0.0.2
 	github.com/vmware/govmomi v0.6.2
-	golang.org/x/crypto v0.21.0
-	golang.org/x/net v0.21.0
+	golang.org/x/crypto v0.24.0
+	golang.org/x/net v0.26.0
 	golang.org/x/oauth2 v0.13.0
-	golang.org/x/sys v0.18.0
+	golang.org/x/sys v0.21.0
 	google.golang.org/api v0.149.0
 )
+
+require golang.org/x/sync v0.7.0 // indirect
 
 require (
 	cloud.google.com/go/compute v1.23.3 // indirect
@@ -58,16 +60,16 @@ require (
 	github.com/stretchr/objx v0.5.0 // indirect
 	github.com/tent/http-link-go v0.0.0-20130702225549-ac974c61c2f9 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	golang.org/x/mod v0.8.0 // indirect
-	golang.org/x/term v0.18.0
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/mod v0.17.0 // indirect
+	golang.org/x/term v0.21.0
+	golang.org/x/text v0.16.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
-	golang.org/x/tools v0.6.0 // indirect
+	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
 	google.golang.org/appengine v1.6.8 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20231120223509-83a465c0220f // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20231212172506-995d672761c0 // indirect
 	google.golang.org/grpc v1.60.1 // indirect
-	google.golang.org/protobuf v1.31.0 // indirect
+	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/check.v1 v1.0.0-20160105164936-4f90aeace3a2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.1 // indirect
