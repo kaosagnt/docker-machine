@@ -2,6 +2,8 @@ module github.com/docker/machine
 
 go 1.22
 
+replace github.com/dgrijalva/jwt-go => github.com/golang-jwt/jwt/v4 v4.0.0
+
 require (
 	github.com/Azure/azure-sdk-for-go v5.0.0-beta+incompatible
 	github.com/Azure/go-autorest v7.2.1+incompatible
@@ -25,7 +27,10 @@ require (
 	google.golang.org/api v0.149.0
 )
 
-require golang.org/x/sync v0.7.0 // indirect
+require (
+	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
+	golang.org/x/sync v0.7.0 // indirect
+)
 
 require (
 	cloud.google.com/go/compute v1.23.3 // indirect
