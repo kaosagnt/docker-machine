@@ -4,7 +4,7 @@ This is a fork of Docker Machine maintained by GitLab for [fixing critical bugs]
 
 We will maintain the fork and provide support through the end of the calendar year 2024.
 
-The replacement [autoscaling solution](https://docs.gitlab.com/runner/runner_autoscale/) is now available as an experiment. The plan is to transition to beta and GA in the second half of the calendar year 2023.
+The replacement [autoscaling solution](https://docs.gitlab.com/runner/runner_autoscale/) is generally available from GitLab 17.1.0 and is recomended for all users.
 
 We do not plan to add new features to the Docker Machine fork.  The intent is only to address critical bugs that can prevent CI job execution or affect running costs. For a new merge request to be considered, the following questions must be answered: 
 
