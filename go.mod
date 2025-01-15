@@ -21,7 +21,7 @@ require (
 	github.com/vmware/govcloudair v0.0.2
 	github.com/vmware/govmomi v0.6.2
 	golang.org/x/crypto v0.31.0
-	golang.org/x/net v0.26.0
+	golang.org/x/net v0.33.0
 	golang.org/x/oauth2 v0.18.0
 	golang.org/x/sys v0.28.0
 	google.golang.org/api v0.169.0
