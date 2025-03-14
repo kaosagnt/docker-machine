@@ -1,6 +1,8 @@
 package amazonec2
 
 import (
+	"log"
+
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 )
@@ -49,7 +51,12 @@ func (c *defaultAWSCredentials) Credentials() *credentials.Credentials {
 type AwsDefaultCredentialsProvider struct{}
 
 func (c *AwsDefaultCredentialsProvider) Credentials() *credentials.Credentials {
-	return session.New().Config.Credentials
+	s, err := session.NewSession()
+	if err != nil {
+		log.Fatalf("error creating new session: %s\n", err)
+	}
+
+	return s.Config.Credentials
 }
 
 type defaultProviderFactory struct{}

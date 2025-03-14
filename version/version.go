@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	Version = "0.16.2-gitlab.31-t2d.9"
+	Version = "0.16.2-gitlab.33-t2d.9"
 
 	// GitCommit will be overwritten automatically by the build system
 	GitCommit = "HEAD"
