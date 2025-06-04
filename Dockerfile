@@ -1,11 +1,11 @@
 FROM golang:1.23
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-                openssh-client \
-                rsync \
-                fuse3 \
-                sshfs \
-        && rm -rf /var/lib/apt/lists/*
+    openssh-client \
+    rsync \
+    fuse3 \
+    sshfs \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV GO111MODULE=on
 
