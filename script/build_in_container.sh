@@ -9,7 +9,7 @@ if [[ $(docker ps -a | grep $DOCKER_CONTAINER_NAME) != "" ]]; then
   docker rm -f $DOCKER_CONTAINER_NAME 2>/dev/null
 fi
 
-docker buildx -t $DOCKER_IMAGE_NAME .
+docker buildx build -t $DOCKER_IMAGE_NAME .
 
 docker run --name $DOCKER_CONTAINER_NAME \
   -e DEBUG \
