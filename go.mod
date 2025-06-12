@@ -7,7 +7,7 @@ replace github.com/dgrijalva/jwt-go => github.com/golang-jwt/jwt/v4 v4.5.2
 require (
 	github.com/Azure/azure-sdk-for-go v5.0.0-beta+incompatible
 	github.com/Azure/go-autorest v7.2.1+incompatible
-	github.com/aws/aws-sdk-go v1.36.21
+	github.com/aws/aws-sdk-go v1.55.7
 	github.com/bugsnag/bugsnag-go v1.0.6-0.20151120182711-02e952891c52
 	github.com/cenkalti/backoff v0.0.0-20141124221459-9831e1e25c87
 	github.com/codegangsta/cli v1.11.1-0.20151120215642-0302d3914d2a
