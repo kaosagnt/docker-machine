@@ -1,4 +1,4 @@
-FROM golang:1.24.3
+FROM golang:1.24.4
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV GO111MODULE=on
 
-ENV USER root
+ENV USER=root
 WORKDIR /go/src/github.com/docker/machine
 
 COPY . ./
