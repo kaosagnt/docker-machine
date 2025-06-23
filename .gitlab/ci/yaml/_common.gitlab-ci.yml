@@ -1,7 +1,7 @@
 variables:
   USE_CONTAINER: "true"
-  CI_IMAGE: registry.gitlab.com/gitlab-org/ci-cd/docker-machine/ci:go1.24.4-alpine3.21
-  DOCKER_VERSION: "27.0.3"
+  CI_IMAGE: registry.gitlab.com/gitlab-org/ci-cd/docker-machine/ci:go1.24.4-alpine3.22
+  DOCKER_VERSION: "28.2.2"
 
 default:
   image: "docker:${DOCKER_VERSION}"
