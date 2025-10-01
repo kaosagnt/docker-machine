@@ -246,6 +246,14 @@ func (c *ComputeUtil) portsUsed() ([]string, error) {
 	return ports, nil
 }
 
+func isErrNotFound(err error) bool {
+	if apiErr, ok := err.(*googleapi.Error); ok {
+		return apiErr.Code == 404
+	}
+
+	return false
+}
+
 // openFirewallPorts configures the firewall to open docker and swarm ports.
 func (c *ComputeUtil) openFirewallPorts(d *Driver) error {
 	if c.skipFirewall {
@@ -257,7 +265,7 @@ func (c *ComputeUtil) openFirewallPorts(d *Driver) error {
 
 	create := false
 	rule, err := c.firewallRule()
-	if err != nil {
+	if err != nil && !isErrNotFound(err) {
 		return fmt.Errorf("requesting firewall rule: %v", err)
 	}
 
