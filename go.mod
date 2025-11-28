@@ -1,6 +1,6 @@
 module github.com/docker/machine
 
-go 1.23.12
+go 1.24.10
 
 replace github.com/dgrijalva/jwt-go => github.com/golang-jwt/jwt/v4 v4.5.2
 
@@ -22,7 +22,7 @@ require (
 	github.com/vmware/govmomi v0.6.2
 	golang.org/x/crypto v0.38.0
 	golang.org/x/net v0.40.0
-	golang.org/x/oauth2 v0.18.0
+	golang.org/x/oauth2 v0.31.0
 	golang.org/x/sys v0.33.0
 	google.golang.org/api v0.169.0
 )
@@ -44,8 +44,7 @@ require (
 )
 
 require (
-	cloud.google.com/go/compute v1.25.1 // indirect
-	cloud.google.com/go/compute/metadata v0.2.3 // indirect
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	github.com/Microsoft/go-winio v0.6.1 // indirect
 	github.com/bitly/go-simplejson v0.5.1 // indirect
 	github.com/bugsnag/osext v0.0.0-20130617224835-0dd3f918b21b // indirect
@@ -79,7 +78,6 @@ require (
 	golang.org/x/term v0.32.0
 	golang.org/x/text v0.25.0 // indirect
 	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
-	google.golang.org/appengine v1.6.8 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240701130421-f6361c86f094 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240701130421-f6361c86f094 // indirect
 	google.golang.org/grpc v1.64.1 // indirect
