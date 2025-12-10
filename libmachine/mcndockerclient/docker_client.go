@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/machine/libmachine/cert"
@@ -44,7 +44,7 @@ func CreateContainer(dockerHost DockerHost, config *container.Config, hostConfig
 		return err
 	}
 
-	if _, err = docker.ImagePull(context.Background(), config.Image, types.ImagePullOptions{}); err != nil {
+	if _, err = docker.ImagePull(context.Background(), config.Image, image.PullOptions{}); err != nil {
 		return fmt.Errorf("Unable to pull image: %s", err)
 	}
 
@@ -53,7 +53,7 @@ func CreateContainer(dockerHost DockerHost, config *container.Config, hostConfig
 		return fmt.Errorf("Error while creating container: %s", err)
 	}
 
-	if err = docker.ContainerStart(context.Background(), containerCreateResp.ID, types.ContainerStartOptions{}); err != nil {
+	if err = docker.ContainerStart(context.Background(), containerCreateResp.ID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("Error while starting container: %s", err)
 	}
 
