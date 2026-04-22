@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/docker/machine/libmachine/auth"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestAuthOptions(t *testing.T) *auth.Options {
@@ -34,62 +36,41 @@ func assertConsistentTLSMaterial(t *testing.T, a *auth.Options) {
 	t.Helper()
 
 	caPEM, err := os.ReadFile(a.CaCertPath)
-	if err != nil {
-		t.Fatalf("read ca cert: %v", err)
-	}
+	require.NoError(t, err, "read ca cert")
 	caBlock, _ := pem.Decode(caPEM)
-	if caBlock == nil {
-		t.Fatalf("ca cert: failed to decode PEM")
-	}
+	require.NotNil(t, caBlock, "ca cert: failed to decode PEM")
 	caCert, err := x509.ParseCertificate(caBlock.Bytes)
-	if err != nil {
-		t.Fatalf("parse ca cert: %v", err)
-	}
+	require.NoError(t, err, "parse ca cert")
 
 	clientPEM, err := os.ReadFile(a.ClientCertPath)
-	if err != nil {
-		t.Fatalf("read client cert: %v", err)
-	}
+	require.NoError(t, err, "read client cert")
 	clientBlock, _ := pem.Decode(clientPEM)
-	if clientBlock == nil {
-		t.Fatalf("client cert: failed to decode PEM")
-	}
+	require.NotNil(t, clientBlock, "client cert: failed to decode PEM")
 	clientCert, err := x509.ParseCertificate(clientBlock.Bytes)
-	if err != nil {
-		t.Fatalf("parse client cert: %v", err)
-	}
+	require.NoError(t, err, "parse client cert")
 
-	if err := clientCert.CheckSignatureFrom(caCert); err != nil {
-		t.Fatalf("client cert is not signed by CA on disk: %v "+
-			"(this is the symptom of the concurrent-bootstrap race)", err)
-	}
+	assert.NoError(t, clientCert.CheckSignatureFrom(caCert),
+		"client cert is not signed by CA on disk "+
+			"(this is the symptom of the concurrent-bootstrap race)")
 }
 
 func TestBootstrapCertificates_Idempotent(t *testing.T) {
 	a := newTestAuthOptions(t)
 
-	if err := BootstrapCertificates(a); err != nil {
-		t.Fatalf("first call: %v", err)
-	}
+	require.NoError(t, BootstrapCertificates(a), "first call")
+
 	// Record CA cert contents so we can confirm the second call does not
 	// regenerate them.
 	caBefore, err := os.ReadFile(a.CaCertPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	if err := BootstrapCertificates(a); err != nil {
-		t.Fatalf("second call: %v", err)
-	}
+	require.NoError(t, BootstrapCertificates(a), "second call")
 
 	caAfter, err := os.ReadFile(a.CaCertPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(caBefore) != string(caAfter) {
-		t.Fatalf("CA certificate was regenerated on the second call; " +
+	require.NoError(t, err)
+	assert.Equal(t, string(caBefore), string(caAfter),
+		"CA certificate was regenerated on the second call; "+
 			"BootstrapCertificates should be a no-op when certs are valid")
-	}
 
 	assertConsistentTLSMaterial(t, a)
 }
@@ -114,14 +95,12 @@ func TestBootstrapCertificates_ConcurrentDoesNotRace(t *testing.T) {
 	errs := make(chan error, parallelism)
 
 	for i := 0; i < parallelism; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start // release all goroutines at once to maximise contention
 			if err := BootstrapCertificates(a); err != nil {
 				errs <- err
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()
