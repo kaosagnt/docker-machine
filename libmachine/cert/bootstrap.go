@@ -4,11 +4,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/docker/machine/libmachine/auth"
 	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/mcnutils"
 )
+
+// bootstrapLockFile is the filename used inside authOptions.CertDir to serialise
+// concurrent certificate bootstrap operations across processes. See
+// BootstrapCertificates for the race it defends against.
+const bootstrapLockFile = ".bootstrap.lock"
 
 func createCACert(authOptions *auth.Options, caOrg string, bits int) error {
 	caCertPath := authOptions.CaCertPath
@@ -95,6 +101,23 @@ func BootstrapCertificates(authOptions *auth.Options) error {
 			return err
 		}
 	}
+
+	// Serialise bootstrap across processes. Without this lock, parallel
+	// `docker-machine create` invocations (e.g. from GitLab Runner's
+	// docker+machine autoscaler provisioning N VMs at once on a fresh host)
+	// each see no CA/client files and race to generate them, overwriting
+	// each other's output. The resulting CA, host certificate, and VM
+	// certificate no longer match, TLS auth to the created VM fails, and
+	// Docker Machine deletes the cert dir — re-triggering the loop.
+	lock, err := newFileLock(filepath.Join(certDir, bootstrapLockFile))
+	if err != nil {
+		return fmt.Errorf("acquiring cert bootstrap lock: %s", err)
+	}
+	defer func() {
+		if err := lock.Unlock(); err != nil {
+			log.Warnf("releasing cert bootstrap lock: %s", err)
+		}
+	}()
 
 	if _, err := os.Stat(caCertPath); os.IsNotExist(err) {
 		if err := createCACert(authOptions, caOrg, bits); err != nil {
