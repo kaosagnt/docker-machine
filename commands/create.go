@@ -130,6 +130,16 @@ var (
 			Usage: "Support extra SANs for TLS certs",
 			Value: &cli.StringSlice{},
 		},
+		cli.BoolFlag{
+			Name: "tls-bootstrap-lock",
+			Usage: "Serialise TLS cert bootstrap behind an exclusive file lock in the " +
+				"cert directory. Enable when multiple `docker-machine create` invocations " +
+				"can run concurrently against the same cert directory on a fresh host " +
+				"(e.g. GitLab Runner docker+machine autoscaler filling its idle pool), to " +
+				"prevent the concurrent CA/client generation race. No effect for " +
+				"single-threaded callers.",
+			EnvVar: "MACHINE_TLS_BOOTSTRAP_LOCK",
+		},
 	}
 )
 
@@ -179,6 +189,7 @@ func cmdCreateInner(c CommandLine, api libmachine.API) error {
 			ServerKeyPath:    filepath.Join(mcndirs.GetMachineDir(), name, "server-key.pem"),
 			StorePath:        filepath.Join(mcndirs.GetMachineDir(), name),
 			ServerCertSANs:   c.StringSlice("tls-san"),
+			BootstrapLock:    c.Bool("tls-bootstrap-lock"),
 		},
 		EngineOptions: &engine.Options{
 			ArbitraryFlags:   c.StringSlice("engine-opt"),

@@ -24,6 +24,9 @@ func newTestAuthOptions(t *testing.T) *auth.Options {
 		CaPrivateKeyPath: filepath.Join(certDir, "ca-key.pem"),
 		ClientCertPath:   filepath.Join(certDir, "cert.pem"),
 		ClientKeyPath:    filepath.Join(certDir, "key.pem"),
+		// Exercise the lock path by default in tests. Tests that explicitly
+		// want to assert unlocked behaviour override this to false.
+		BootstrapLock: true,
 	}
 }
 
@@ -75,6 +78,24 @@ func TestBootstrapCertificates_Idempotent(t *testing.T) {
 	assertConsistentTLSMaterial(t, a)
 }
 
+// TestBootstrapCertificates_NoLockWhenDisabled asserts that when
+// BootstrapLock is left at its zero value, BootstrapCertificates takes
+// no lock and creates no lock file in the cert directory. This is the
+// existing, opt-in-only contract for all callers that don't set the
+// `--tls-bootstrap-lock` flag or MACHINE_TLS_BOOTSTRAP_LOCK env var.
+func TestBootstrapCertificates_NoLockWhenDisabled(t *testing.T) {
+	a := newTestAuthOptions(t)
+	a.BootstrapLock = false
+
+	require.NoError(t, BootstrapCertificates(a))
+
+	_, err := os.Stat(filepath.Join(a.CertDir, bootstrapLockFile))
+	assert.True(t, os.IsNotExist(err),
+		"expected no bootstrap lock file to be created when BootstrapLock is off, got err=%v", err)
+
+	assertConsistentTLSMaterial(t, a)
+}
+
 // TestBootstrapCertificates_ConcurrentDoesNotRace exercises the race that
 // manifested in production when GitLab Runner's docker+machine autoscaler
 // spawned many `docker-machine create` subprocesses simultaneously on a
@@ -83,8 +104,8 @@ func TestBootstrapCertificates_Idempotent(t *testing.T) {
 // decide the CA is missing, and race to write ca.pem / ca-key.pem /
 // cert.pem / key.pem. The files end up inconsistent: the client certificate
 // on disk is signed by a CA key that is no longer on disk. This test asserts
-// that after N concurrent callers finish, the client cert still verifies
-// against the CA cert on disk.
+// that after N concurrent callers finish with BootstrapLock enabled, the
+// client cert still verifies against the CA cert on disk.
 func TestBootstrapCertificates_ConcurrentDoesNotRace(t *testing.T) {
 	const parallelism = 20
 
