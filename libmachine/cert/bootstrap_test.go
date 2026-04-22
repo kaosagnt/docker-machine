@@ -13,11 +13,7 @@ import (
 
 func newTestAuthOptions(t *testing.T) *auth.Options {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "machine-bootstrap-test-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := t.TempDir()
 
 	certDir := filepath.Join(dir, "certs")
 	return &auth.Options{
