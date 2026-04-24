@@ -8,14 +8,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// fileLock is an exclusive, blocking, cross-process advisory lock backed by a
-// file. It is used to serialise concurrent invocations of
-// BootstrapCertificates so that simultaneous `docker-machine create`
-// subprocesses do not race on CA/client certificate generation.
-type fileLock struct {
-	f *os.File
-}
-
 // newFileLock opens (creating if necessary) the file at path and acquires an
 // exclusive lock on it, blocking until the lock is available. The lock is
 // released by calling Unlock.
@@ -29,11 +21,4 @@ func newFileLock(path string) (*fileLock, error) {
 		return nil, err
 	}
 	return &fileLock{f: f}, nil
-}
-
-// Unlock releases the lock. Closing the underlying file descriptor is
-// sufficient: the kernel releases any flock held on the last close of the
-// open file description.
-func (l *fileLock) Unlock() error {
-	return l.f.Close()
 }

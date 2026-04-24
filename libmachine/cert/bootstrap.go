@@ -16,6 +16,23 @@ import (
 // BootstrapCertificates for the race it defends against.
 const bootstrapLockFile = ".bootstrap.lock"
 
+// fileLock is an exclusive, blocking, cross-process advisory lock backed by a
+// file. It is used to serialise concurrent invocations of
+// BootstrapCertificates so that simultaneous `docker-machine create`
+// subprocesses do not race on CA/client certificate generation. The
+// platform-specific acquisition and release primitives live in
+// flock_unix.go and flock_windows.go.
+type fileLock struct {
+	f *os.File
+}
+
+// Unlock releases the lock. Closing the underlying file descriptor is
+// sufficient on every supported platform: the kernel releases any lock
+// held on the last close of the open file description / handle.
+func (l *fileLock) Unlock() error {
+	return l.f.Close()
+}
+
 func createCACert(authOptions *auth.Options, caOrg string, bits int) error {
 	caCertPath := authOptions.CaCertPath
 	caPrivateKeyPath := authOptions.CaPrivateKeyPath
