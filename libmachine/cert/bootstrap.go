@@ -5,11 +5,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/docker/machine/libmachine/auth"
 	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/mcnutils"
 )
+
+// bootstrapLockDefaultTimeout bounds how long BootstrapCertificates will wait
+// to acquire the cert-dir file lock before failing loudly. The goal is not to
+// cover the cost of legitimate work under the lock (a few hundred ms of RSA
+// keygen at worst) but to make sure a stale holder — e.g. a SIGSTOP'd or
+// ptrace-frozen process — cannot wedge unrelated `docker-machine create`
+// invocations for the full gitlab-runner subprocess timeout (currently 1h).
+const bootstrapLockDefaultTimeout = 15 * time.Second
+
+// errFileLockAcquiring is returned by newFileLockWithTimeout when the deadline
+// elapses before the lock can be acquired.
+var errFileLockAcquiring = errors.New("timed out awaiting for file lock acquire")
 
 // bootstrapLockFile is the filename used inside authOptions.CertDir to serialise
 // concurrent certificate bootstrap operations across processes. See
@@ -95,6 +108,10 @@ func createCert(authOptions *auth.Options, org string, bits int) error {
 }
 
 func BootstrapCertificates(authOptions *auth.Options) error {
+	return bootstrapCertificatesWithLockTimeout(authOptions, bootstrapLockDefaultTimeout)
+}
+
+func bootstrapCertificatesWithLockTimeout(authOptions *auth.Options, lockTimeout time.Duration) error {
 	certDir := authOptions.CertDir
 	caCertPath := authOptions.CaCertPath
 	clientCertPath := authOptions.ClientCertPath
@@ -132,9 +149,9 @@ func BootstrapCertificates(authOptions *auth.Options) error {
 	// enable via `--tls-bootstrap-lock` on `docker-machine create` or via
 	// the MACHINE_TLS_BOOTSTRAP_LOCK environment variable.
 	if authOptions.BootstrapLock {
-		lock, err := newFileLock(filepath.Join(certDir, bootstrapLockFile))
+		lock, err := newFileLockWithTimeout(filepath.Join(certDir, bootstrapLockFile), lockTimeout)
 		if err != nil {
-			return fmt.Errorf("acquiring cert bootstrap lock: %s", err)
+			return fmt.Errorf("acquiring cert bootstrap lock: %w", err)
 		}
 		defer func() {
 			if err := lock.Unlock(); err != nil {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/docker/machine/libmachine/auth"
 	"github.com/stretchr/testify/assert"
@@ -132,4 +133,24 @@ func TestBootstrapCertificates_ConcurrentDoesNotRace(t *testing.T) {
 	}
 
 	assertConsistentTLSMaterial(t, a)
+}
+
+// TestBootstrapCertificates_StaleLock asserts that when the cert-dir lock
+// is already held (e.g. by a stuck or ptrace-frozen process),
+// BootstrapCertificates does not block indefinitely but instead returns
+// errFileLockAcquiring once its deadline elapses. Without this bound, a
+// stale holder could wedge every concurrent `docker-machine create` until
+// gitlab-runner's own (1-hour) subprocess timeout fires.
+func TestBootstrapCertificates_StaleLock(t *testing.T) {
+	a := newTestAuthOptions(t)
+
+	require.NoError(t, os.MkdirAll(a.CertDir, 0700))
+	lock, err := newFileLockWithTimeout(filepath.Join(a.CertDir, bootstrapLockFile), 1*time.Second)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, lock.Unlock())
+	})
+
+	err = bootstrapCertificatesWithLockTimeout(a, 100*time.Millisecond)
+	assert.ErrorIs(t, err, errFileLockAcquiring)
 }
