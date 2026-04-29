@@ -409,9 +409,11 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 			DiskType:   c.diskType(),
 			Labels:     parseLabels(d),
 		}
-		// ProvisionedIops and ProvisionedThroughput only apply to Hyperdisk
-		// disk types. The GCE API silently ignores these fields for PD-* types,
-		// so it's safe to pass them through unconditionally when set.
+		// ProvisionedIops and ProvisionedThroughput are part of the
+		// provisioning model for Hyperdisk disk types. They are not consumed
+		// by the provisioning model for non-Hyperdisk (PD-*) types; in our
+		// testing the GCE API accepts the create request as a no-op for these
+		// fields. Only set them when the user has provided a positive value.
 		if d.ProvisionedIops > 0 {
 			params.ProvisionedIops = int64(d.ProvisionedIops)
 		}

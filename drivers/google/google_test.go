@@ -31,21 +31,15 @@ func TestSetConfigFromFlags_ProvisionedIopsAndThroughput(t *testing.T) {
 		expectedIops       int
 		expectedThroughput int
 	}{
-		"defaults are zero": {
+		"unset flags default to zero (preserves API defaults)": {
 			expectedIops:       0,
 			expectedThroughput: 0,
 		},
-		"valid positive values are stored": {
+		"positive values are stored on the driver": {
 			iops:               3000,
 			throughput:         140,
 			expectedIops:       3000,
 			expectedThroughput: 140,
-		},
-		"zero is accepted (preserves API defaults)": {
-			iops:               0,
-			throughput:         0,
-			expectedIops:       0,
-			expectedThroughput: 0,
 		},
 		"negative iops is rejected": {
 			iops:       -1,

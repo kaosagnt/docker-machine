@@ -157,12 +157,12 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.IntFlag{
 			Name:   "google-provisioned-iops",
-			Usage:  "GCE Hyperdisk provisioned IOPS (only applies to Hyperdisk disk types; ignored for PD)",
+			Usage:  "GCE Hyperdisk provisioned IOPS (applies to Hyperdisk disk types; not consumed by non-Hyperdisk types)",
 			EnvVar: "GOOGLE_PROVISIONED_IOPS",
 		},
 		mcnflag.IntFlag{
 			Name:   "google-provisioned-throughput",
-			Usage:  "GCE Hyperdisk provisioned throughput in MiB/s (only applies to Hyperdisk disk types; ignored for PD)",
+			Usage:  "GCE Hyperdisk provisioned throughput in MiB/s (applies to Hyperdisk disk types; not consumed by non-Hyperdisk types)",
 			EnvVar: "GOOGLE_PROVISIONED_THROUGHPUT",
 		},
 		mcnflag.StringFlag{
@@ -324,14 +324,16 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		d.MachineImage = strings.TrimPrefix(d.MachineImage, "https://www.googleapis.com/compute/v1/projects/")
 		d.DiskSize = flags.Int("google-disk-size")
 		d.DiskType = flags.String("google-disk-type")
-		d.ProvisionedIops = flags.Int("google-provisioned-iops")
-		if d.ProvisionedIops < 0 {
-			return fmt.Errorf("google-provisioned-iops must be >= 0, got %d", d.ProvisionedIops)
+		provisionedIops := flags.Int("google-provisioned-iops")
+		if provisionedIops < 0 {
+			return fmt.Errorf("google-provisioned-iops must be >= 0, got %d", provisionedIops)
 		}
-		d.ProvisionedThroughput = flags.Int("google-provisioned-throughput")
-		if d.ProvisionedThroughput < 0 {
-			return fmt.Errorf("google-provisioned-throughput must be >= 0, got %d", d.ProvisionedThroughput)
+		provisionedThroughput := flags.Int("google-provisioned-throughput")
+		if provisionedThroughput < 0 {
+			return fmt.Errorf("google-provisioned-throughput must be >= 0, got %d", provisionedThroughput)
 		}
+		d.ProvisionedIops = provisionedIops
+		d.ProvisionedThroughput = provisionedThroughput
 		d.Address = flags.String("google-address")
 		d.Network = flags.String("google-network")
 		d.Subnetwork = flags.String("google-subnetwork")
