@@ -198,3 +198,30 @@ func bootstrapCertificatesWithLockTimeout(authOptions *auth.Options, lockTimeout
 
 	return nil
 }
+
+// newFileLockWithTimeout opens (creating if necessary) the file at path and
+// tries to acquire an exclusive lock on it, retrying until timeout elapses.
+// On timeout it returns errFileLockAcquiring.
+func newFileLockWithTimeout(path string, timeout time.Duration) (*fileLock, error) {
+	deadline := time.Now().Add(timeout)
+	backoff := 10 * time.Millisecond
+
+	for {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+		if err != nil {
+			return nil, err
+		}
+
+		if lock := flock(f); lock != nil {
+			return lock, nil
+		}
+
+		f.Close()
+
+		if time.Now().After(deadline) {
+			return nil, errFileLockAcquiring
+		}
+
+		time.Sleep(backoff)
+	}
+}
