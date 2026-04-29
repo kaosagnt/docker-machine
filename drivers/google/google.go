@@ -325,7 +325,13 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		d.DiskSize = flags.Int("google-disk-size")
 		d.DiskType = flags.String("google-disk-type")
 		d.ProvisionedIops = flags.Int("google-provisioned-iops")
+		if d.ProvisionedIops < 0 {
+			return fmt.Errorf("google-provisioned-iops must be >= 0, got %d", d.ProvisionedIops)
+		}
 		d.ProvisionedThroughput = flags.Int("google-provisioned-throughput")
+		if d.ProvisionedThroughput < 0 {
+			return fmt.Errorf("google-provisioned-throughput must be >= 0, got %d", d.ProvisionedThroughput)
+		}
 		d.Address = flags.String("google-address")
 		d.Network = flags.String("google-network")
 		d.Subnetwork = flags.String("google-subnetwork")

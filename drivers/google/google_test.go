@@ -23,6 +23,75 @@ func TestSetConfigFromFlags(t *testing.T) {
 	assert.Empty(t, checkFlags.InvalidFlags)
 }
 
+func TestSetConfigFromFlags_ProvisionedIopsAndThroughput(t *testing.T) {
+	tests := map[string]struct {
+		iops               interface{}
+		throughput         interface{}
+		expectErr          bool
+		expectedIops       int
+		expectedThroughput int
+	}{
+		"defaults are zero": {
+			expectedIops:       0,
+			expectedThroughput: 0,
+		},
+		"valid positive values are stored": {
+			iops:               3000,
+			throughput:         140,
+			expectedIops:       3000,
+			expectedThroughput: 140,
+		},
+		"zero is accepted (preserves API defaults)": {
+			iops:               0,
+			throughput:         0,
+			expectedIops:       0,
+			expectedThroughput: 0,
+		},
+		"negative iops is rejected": {
+			iops:       -1,
+			throughput: 140,
+			expectErr:  true,
+		},
+		"negative throughput is rejected": {
+			iops:       3000,
+			throughput: -1,
+			expectErr:  true,
+		},
+	}
+
+	for tn, tt := range tests {
+		t.Run(tn, func(t *testing.T) {
+			driver := NewDriver("", "")
+
+			flagsValues := map[string]interface{}{
+				"google-project": "PROJECT",
+			}
+			if tt.iops != nil {
+				flagsValues["google-provisioned-iops"] = tt.iops
+			}
+			if tt.throughput != nil {
+				flagsValues["google-provisioned-throughput"] = tt.throughput
+			}
+
+			checkFlags := &drivers.CheckDriverOptions{
+				FlagsValues: flagsValues,
+				CreateFlags: driver.GetCreateFlags(),
+			}
+
+			err := driver.SetConfigFromFlags(checkFlags)
+
+			if tt.expectErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.expectedIops, driver.ProvisionedIops)
+			assert.Equal(t, tt.expectedThroughput, driver.ProvisionedThroughput)
+		})
+	}
+}
+
 func TestMetadataMapFromStringSlice(t *testing.T) {
 	tests := map[string]struct {
 		slice          []string
