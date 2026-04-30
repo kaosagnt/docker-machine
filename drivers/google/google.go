@@ -40,30 +40,32 @@ func (bf *backoffFactory) create() *backoff.ExponentialBackOff {
 // Driver is a struct compatible with the docker.hosts.drivers.Driver interface.
 type Driver struct {
 	*drivers.BaseDriver
-	Zone              string
-	MachineType       string
-	MinCPUPlatform    string
-	MachineImage      string
-	DiskType          string
-	Address           string
-	Network           string
-	Subnetwork        string
-	Preemptible       bool
-	UseInternalIP     bool
-	UseInternalIPOnly bool
-	ServiceAccount    string
-	Scopes            string
-	DiskSize          int
-	Project           string
-	Tags              string
-	UseExisting       bool
-	OpenPorts         []string
-	Labels            []string
-	Metadata          metadataMap
-	MetadataFromFile  metadataMap
-	Accelerator       string
-	MaintenancePolicy string
-	SkipFirewall      bool
+	Zone                  string
+	MachineType           string
+	MinCPUPlatform        string
+	MachineImage          string
+	DiskType              string
+	Address               string
+	Network               string
+	Subnetwork            string
+	Preemptible           bool
+	UseInternalIP         bool
+	UseInternalIPOnly     bool
+	ServiceAccount        string
+	Scopes                string
+	DiskSize              int
+	ProvisionedIops       int
+	ProvisionedThroughput int
+	Project               string
+	Tags                  string
+	UseExisting           bool
+	OpenPorts             []string
+	Labels                []string
+	Metadata              metadataMap
+	MetadataFromFile      metadataMap
+	Accelerator           string
+	MaintenancePolicy     string
+	SkipFirewall          bool
 
 	OperationBackoffFactory *backoffFactory
 }
@@ -152,6 +154,16 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "GCE Instance Disk type",
 			Value:  defaultDiskType,
 			EnvVar: "GOOGLE_DISK_TYPE",
+		},
+		mcnflag.IntFlag{
+			Name:   "google-provisioned-iops",
+			Usage:  "GCE Hyperdisk provisioned IOPS (applies to Hyperdisk disk types; not consumed by non-Hyperdisk types)",
+			EnvVar: "GOOGLE_PROVISIONED_IOPS",
+		},
+		mcnflag.IntFlag{
+			Name:   "google-provisioned-throughput",
+			Usage:  "GCE Hyperdisk provisioned throughput in MiB/s (applies to Hyperdisk disk types; not consumed by non-Hyperdisk types)",
+			EnvVar: "GOOGLE_PROVISIONED_THROUGHPUT",
 		},
 		mcnflag.StringFlag{
 			Name:   "google-network",
@@ -312,6 +324,16 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		d.MachineImage = strings.TrimPrefix(d.MachineImage, "https://www.googleapis.com/compute/v1/projects/")
 		d.DiskSize = flags.Int("google-disk-size")
 		d.DiskType = flags.String("google-disk-type")
+		provisionedIops := flags.Int("google-provisioned-iops")
+		if provisionedIops < 0 {
+			return fmt.Errorf("google-provisioned-iops must be >= 0, got %d", provisionedIops)
+		}
+		provisionedThroughput := flags.Int("google-provisioned-throughput")
+		if provisionedThroughput < 0 {
+			return fmt.Errorf("google-provisioned-throughput must be >= 0, got %d", provisionedThroughput)
+		}
+		d.ProvisionedIops = provisionedIops
+		d.ProvisionedThroughput = provisionedThroughput
 		d.Address = flags.String("google-address")
 		d.Network = flags.String("google-network")
 		d.Subnetwork = flags.String("google-subnetwork")

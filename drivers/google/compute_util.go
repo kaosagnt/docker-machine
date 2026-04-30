@@ -401,7 +401,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 
 	disk, err := c.disk()
 	if disk == nil || err != nil {
-		instance.Disks[0].InitializeParams = &raw.AttachedDiskInitializeParams{
+		params := &raw.AttachedDiskInitializeParams{
 			DiskName:    c.diskName(),
 			SourceImage: "https://www.googleapis.com/compute/v1/projects/" + d.MachineImage,
 			// The maximum supported disk size is 1000GB, the cast should be fine.
@@ -409,6 +409,18 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 			DiskType:   c.diskType(),
 			Labels:     parseLabels(d),
 		}
+		// ProvisionedIops and ProvisionedThroughput are part of the
+		// provisioning model for Hyperdisk disk types. They are not consumed
+		// by the provisioning model for non-Hyperdisk (PD-*) types; in our
+		// testing the GCE API accepts the create request as a no-op for these
+		// fields. Only set them when the user has provided a positive value.
+		if d.ProvisionedIops > 0 {
+			params.ProvisionedIops = int64(d.ProvisionedIops)
+		}
+		if d.ProvisionedThroughput > 0 {
+			params.ProvisionedThroughput = int64(d.ProvisionedThroughput)
+		}
+		instance.Disks[0].InitializeParams = params
 	} else {
 		instance.Disks[0].Source = c.zoneURL + "/disks/" + c.instanceName + "-disk"
 	}
