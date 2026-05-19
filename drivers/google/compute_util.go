@@ -47,6 +47,15 @@ type ComputeUtil struct {
 	maintenancePolicy string
 	skipFirewall      bool
 
+	// regionExplicit mirrors Driver.Region; used by region() when zone is
+	// empty (bulkInsert mode pre-zone-discovery). "Explicit" suffix
+	// distinguishes the field from the region() method.
+	regionExplicit string
+
+	// bulkInsert policy inputs (empty in direct mode).
+	flexMachineTypes []string
+	locationZones    []string
+
 	operationBackoffFactory *backoffFactory
 }
 
@@ -61,6 +70,17 @@ var (
 	networkRegex        = regexp.MustCompile(`/networks/`)
 	networkProjectRegex = regexp.MustCompile(apiURL + `(?P<project_name>[^/]+)/global/networks/(?P<network_name>[A-Za-z-]+)`)
 )
+
+// effectiveZone returns the zone per-instance API calls should target.
+// In bulkInsert mode Driver.Zone is the libmachine default and tells us
+// nothing; ResolvedZone is the truth (empty means post-create discovery
+// failed, surfaces as a clear API error rather than wrong-zone calls).
+func effectiveZone(d *Driver) string {
+	if d.BulkInsert {
+		return d.ResolvedZone
+	}
+	return d.Zone
+}
 
 // NewComputeUtil creates and initializes a ComputeUtil.
 func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
@@ -82,8 +102,10 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		networkProject = matches[1]
 	}
 
+	zone := effectiveZone(driver)
+
 	return &ComputeUtil{
-		zone:                    driver.Zone,
+		zone:                    zone,
 		instanceName:            driver.MachineName,
 		userName:                driver.SSHUser,
 		project:                 driver.Project,
@@ -96,7 +118,7 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		useInternalIP:           driver.UseInternalIP,
 		useInternalIPOnly:       driver.UseInternalIPOnly,
 		service:                 service,
-		zoneURL:                 apiURL + driver.Project + "/zones/" + driver.Zone,
+		zoneURL:                 apiURL + driver.Project + "/zones/" + zone,
 		globalURL:               apiURL + driver.Project + "/global",
 		SwarmMaster:             driver.SwarmMaster,
 		SwarmHost:               driver.SwarmHost,
@@ -106,6 +128,9 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		accelerator:             driver.Accelerator,
 		maintenancePolicy:       driver.MaintenancePolicy,
 		skipFirewall:            driver.SkipFirewall,
+		regionExplicit:          driver.Region,
+		flexMachineTypes:        driver.FlexMachineTypes,
+		locationZones:           driver.LocationZones,
 	}, nil
 }
 
@@ -197,7 +222,14 @@ func (c *ComputeUtil) staticAddress() (string, error) {
 	return externalAddress.Address, nil
 }
 
+// region returns the GCP region this ComputeUtil targets. In bulkInsert
+// mode the operator supplies it explicitly (zone is unknown pre-create);
+// otherwise it's derived from zone by stripping the trailing "-<letter>"
+// (e.g. us-east1-c -> us-east1).
 func (c *ComputeUtil) region() string {
+	if c.regionExplicit != "" {
+		return c.regionExplicit
+	}
 	return c.zone[:len(c.zone)-2]
 }
 
@@ -312,8 +344,17 @@ func (c *ComputeUtil) instance() (*raw.Instance, error) {
 	return c.service.Instances.Get(c.project, c.zone, c.instanceName).Do()
 }
 
-// createInstance creates a GCE VM instance.
+// createInstance creates a GCE VM instance, either directly via
+// Instances.Insert (zonal) or, when --google-bulk-insert is set, via
+// RegionInstances.BulkInsert. The bulkInsert path supports a zone
+// preference list (LocationPolicy) and a ranked machine-type fallback
+// (InstanceFlexibilityPolicy); GCP picks the first combination it can
+// fulfil. See Driver.usesBulkInsert.
 func (c *ComputeUtil) createInstance(d *Driver) error {
+	if d.usesBulkInsert() {
+		return c.createInstanceViaBulkInsert(d)
+	}
+
 	log.Infof("Creating instance")
 
 	var net string
@@ -597,7 +638,13 @@ func parseLabels(d *Driver) map[string]string {
 }
 
 // deleteInstance deletes the instance, leaving the persistent disk.
+// Direct and bulkInsert modes both converge on Instances.Delete here;
+// effectiveZone resolves c.zone to the placed zone before we get here.
 func (c *ComputeUtil) deleteInstance() error {
+	if c.zone == "" {
+		return fmt.Errorf("cannot delete instance %q: zone unresolved (Driver.ResolvedZone / Driver.Zone both empty)", c.instanceName)
+	}
+
 	log.Infof("Deleting instance.")
 	op, err := c.service.Instances.Delete(c.project, c.zone, c.instanceName).Do()
 	if err != nil {
@@ -666,9 +713,22 @@ func (c *ComputeUtil) waitForOp(opGetter func() (*raw.Operation, error)) error {
 }
 
 // waitForRegionalOp waits for the regional operation to finish.
+//
+// Historical naming: this waits for ZoneOperations despite its name and
+// renaming it would touch every caller. For true region-scoped operations
+// (bulkInsert) use waitForRegionOp below.
 func (c *ComputeUtil) waitForRegionalOp(name string) error {
 	return c.waitForOp(func() (*raw.Operation, error) {
 		return c.service.ZoneOperations.Wait(c.project, c.zone, name).Do()
+	})
+}
+
+// waitForRegionOp waits for an actually-regional operation (one issued
+// against RegionInstances etc.). Distinct from waitForRegionalOp because
+// that one polls ZoneOperations under a misleading name.
+func (c *ComputeUtil) waitForRegionOp(name string) error {
+	return c.waitForOp(func() (*raw.Operation, error) {
+		return c.service.RegionOperations.Wait(c.project, c.region(), name).Do()
 	})
 }
 
