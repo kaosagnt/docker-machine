@@ -526,3 +526,41 @@ func TestAccelerator(t *testing.T) {
 		})
 	}
 }
+
+func TestEffectiveZone(t *testing.T) {
+	tests := map[string]struct {
+		driver Driver
+		want   string
+	}{
+		"direct mode, Zone set": {
+			driver: Driver{Zone: "us-east1-c"},
+			want:   "us-east1-c",
+		},
+		"direct mode, Zone empty": {
+			driver: Driver{},
+			want:   "",
+		},
+		"direct mode ignores ResolvedZone": {
+			driver: Driver{Zone: "us-east1-c", ResolvedZone: "us-west1-a"},
+			want:   "us-east1-c",
+		},
+		"bulkInsert mode, ResolvedZone set": {
+			driver: Driver{BulkInsert: true, ResolvedZone: "us-east1-c"},
+			want:   "us-east1-c",
+		},
+		"bulkInsert mode, ResolvedZone empty falls through to empty (not Zone)": {
+			driver: Driver{BulkInsert: true, Zone: "us-central1-a"},
+			want:   "",
+		},
+		"bulkInsert mode ignores Zone even when ResolvedZone is set": {
+			driver: Driver{BulkInsert: true, Zone: "us-central1-a", ResolvedZone: "us-east1-c"},
+			want:   "us-east1-c",
+		},
+	}
+
+	for tn, tt := range tests {
+		t.Run(tn, func(t *testing.T) {
+			assert.Equal(t, tt.want, effectiveZone(&tt.driver))
+		})
+	}
+}
