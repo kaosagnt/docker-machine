@@ -1,6 +1,6 @@
 module github.com/docker/machine
 
-go 1.25.10
+go 1.26.3
 
 replace github.com/dgrijalva/jwt-go => github.com/golang-jwt/jwt/v4 v4.5.2
 
