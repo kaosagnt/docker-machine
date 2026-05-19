@@ -785,7 +785,7 @@ func (d *Driver) assignFloatingIP() error {
 
 	var floatingIP *FloatingIP
 
-	log.Debugf("Looking for an available floating IP", map[string]string{
+	log.Debug("Looking for an available floating IP", map[string]string{
 		"MachineId": d.MachineId,
 		"Pool":      d.FloatingIpPool,
 	})

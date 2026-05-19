@@ -263,7 +263,7 @@ func (a AzureClient) CreateSubnet(ctx *DeploymentContext, resourceGroup, virtual
 		return err
 	}
 
-	log.Warn("Create subnet operation error %v: ", err)
+	log.Warnf("Create subnet operation error %v: ", err)
 	return err
 
 }
