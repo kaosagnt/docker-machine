@@ -53,27 +53,131 @@ func TestBuildLocationPolicy_Zones(t *testing.T) {
 
 func TestBuildInstanceFlexibilityPolicy_Nil(t *testing.T) {
 	c := &ComputeUtil{}
-	assert.Nil(t, c.buildInstanceFlexibilityPolicy())
+	p, err := c.buildInstanceFlexibilityPolicy(&Driver{})
+	require.NoError(t, err)
+	assert.Nil(t, p)
 }
 
 func TestBuildInstanceFlexibilityPolicy_Ranked(t *testing.T) {
 	c := &ComputeUtil{
-		flexMachineTypes: []string{"n2-standard-2", "n2d-standard-2", "c2-standard-4"},
+		flexSelections: []string{
+			"machine-type=n2-standard-2",
+			"machine-type=n2d-standard-2",
+			"machine-type=c2-standard-4",
+		},
 	}
-	p := c.buildInstanceFlexibilityPolicy()
+	p, err := c.buildInstanceFlexibilityPolicy(&Driver{})
+	require.NoError(t, err)
 	require.NotNil(t, p)
 	require.Len(t, p.InstanceSelections, 3)
-
+	require.Contains(t, p.InstanceSelections, "rank-0")
+	require.Contains(t, p.InstanceSelections, "rank-1")
+	require.Contains(t, p.InstanceSelections, "rank-2")
 	r0 := p.InstanceSelections["rank-0"]
 	r1 := p.InstanceSelections["rank-1"]
 	r2 := p.InstanceSelections["rank-2"]
 
 	assert.Equal(t, int64(0), r0.Rank)
 	assert.Equal(t, []string{"n2-standard-2"}, r0.MachineTypes)
+	assert.Nil(t, r0.Disks)
 	assert.Equal(t, int64(1), r1.Rank)
 	assert.Equal(t, []string{"n2d-standard-2"}, r1.MachineTypes)
 	assert.Equal(t, int64(2), r2.Rank)
 	assert.Equal(t, []string{"c2-standard-4"}, r2.MachineTypes)
+}
+
+func TestParseFlexSelectionEntry(t *testing.T) {
+	cases := map[string]struct {
+		entry        string
+		want         flexSelection
+		wantErrSubst string
+	}{
+		"machine-type only": {
+			entry: "machine-type=n2-standard-2",
+			want:  flexSelection{MachineType: "n2-standard-2"},
+		},
+		"with disk-type": {
+			entry: "machine-type=n4-standard-2,disk-type=hyperdisk-balanced",
+			want:  flexSelection{MachineType: "n4-standard-2", DiskType: "hyperdisk-balanced"},
+		},
+		"full override": {
+			entry: "machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140",
+			want:  flexSelection{MachineType: "n4-standard-2", DiskType: "hyperdisk-balanced", DiskIops: 3000, DiskThroughput: 140},
+		},
+		"whitespace around equals": {
+			entry: "machine-type = n4-standard-2 , disk-type = hyperdisk-balanced",
+			want:  flexSelection{MachineType: "n4-standard-2", DiskType: "hyperdisk-balanced"},
+		},
+		"empty entry between commas": {
+			entry: "machine-type=n4-standard-2,,disk-type=hyperdisk-balanced",
+			want:  flexSelection{MachineType: "n4-standard-2", DiskType: "hyperdisk-balanced"},
+		},
+		"unknown key ignored": {
+			entry: "machine-type=n4-standard-2,foo=bar",
+			want:  flexSelection{MachineType: "n4-standard-2"},
+		},
+		"missing machine-type":   {entry: "disk-type=hyperdisk-balanced", wantErrSubst: "missing required key machine-type"},
+		"missing equals":         {entry: "n4-standard-2", wantErrSubst: "is not key=value"},
+		"empty value":            {entry: "machine-type=n4-standard-2,disk-type=", wantErrSubst: `empty value for key "disk-type"`},
+		"empty machine-type":     {entry: "machine-type=", wantErrSubst: `empty value for key "machine-type"`},
+		"duplicate key":          {entry: "machine-type=a,machine-type=b", wantErrSubst: `duplicate key "machine-type"`},
+		"non-integer iops":       {entry: "machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=abc", wantErrSubst: "disk-iops"},
+		"negative iops":          {entry: "machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=-1", wantErrSubst: "disk-iops"},
+		"non-integer throughput": {entry: "machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-throughput=fast", wantErrSubst: "disk-throughput"},
+		"iops without disk-type": {entry: "machine-type=n4-standard-2,disk-iops=3000", wantErrSubst: "require disk-type"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseFlexSelectionEntry(tc.entry)
+			if tc.wantErrSubst != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErrSubst)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestBuildInstanceFlexibilityPolicy_PerSelectionDiskOverride(t *testing.T) {
+	c := &ComputeUtil{
+		flexSelections: []string{
+			"machine-type=t2d-standard-2",
+			"machine-type=n2d-standard-2",
+			"machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140",
+		},
+	}
+	d := &Driver{
+		MachineImage: "cos-cloud/global/images/family/cos-stable",
+		DiskSize:     10,
+		Labels:       []string{"team:runners", "env:ci"},
+	}
+	p, err := c.buildInstanceFlexibilityPolicy(d)
+	require.NoError(t, err)
+	require.NotNil(t, p)
+	require.Len(t, p.InstanceSelections, 3)
+	require.Contains(t, p.InstanceSelections, "rank-0")
+	require.Contains(t, p.InstanceSelections, "rank-1")
+	require.Contains(t, p.InstanceSelections, "rank-2")
+	r0 := p.InstanceSelections["rank-0"]
+	assert.Equal(t, []string{"t2d-standard-2"}, r0.MachineTypes)
+	assert.Nil(t, r0.Disks, "bare entry must not carry a disk override")
+
+	r1 := p.InstanceSelections["rank-1"]
+	assert.Nil(t, r1.Disks)
+
+	r2 := p.InstanceSelections["rank-2"]
+	assert.Equal(t, []string{"n4-standard-2"}, r2.MachineTypes)
+	require.Len(t, r2.Disks, 1)
+	assert.True(t, r2.Disks[0].Boot)
+	assert.True(t, r2.Disks[0].AutoDelete)
+	assert.Equal(t, bootDeviceName, r2.Disks[0].DeviceName)
+	assert.Equal(t, "hyperdisk-balanced", r2.Disks[0].InitializeParams.DiskType)
+	assert.Equal(t, int64(10), r2.Disks[0].InitializeParams.DiskSizeGb)
+	assert.Equal(t, int64(3000), r2.Disks[0].InitializeParams.ProvisionedIops)
+	assert.Equal(t, int64(140), r2.Disks[0].InitializeParams.ProvisionedThroughput)
+	assert.Equal(t, map[string]string{"team": "runners", "env": "ci"}, r2.Disks[0].InitializeParams.Labels)
 }
 
 func TestZoneFromInstanceURL(t *testing.T) {
@@ -184,9 +288,8 @@ func TestBuildBulkInsertInstanceProperties_BareNamesNoZone(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, props)
 
-	// MachineType: bare name, no /zones/ prefix.
-	assert.Equal(t, "n2-standard-2", props.MachineType)
-	assert.NotContains(t, props.MachineType, "/zones/")
+	// MachineType: unset in flex mode (flex selections provide it).
+	assert.Empty(t, props.MachineType)
 
 	// DiskType: bare name on InitializeParams.
 	require.Len(t, props.Disks, 1)

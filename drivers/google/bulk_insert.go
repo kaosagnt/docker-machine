@@ -6,7 +6,7 @@ package google
 // is replaced by a regional RegionInstances.BulkInsert. The single
 // request carries LocationPolicy (zone preference, from
 // --google-location-zone) and InstanceFlexibilityPolicy (ranked
-// machine-type fallback, from --google-flex-machine-type) so GCP
+// machine-type fallback, from --google-flex-selection) so GCP
 // picks zone × machine-type per call.
 //
 // The Operation returned by BulkInsert is region-scoped and tells us
@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/docker/machine/libmachine/log"
@@ -26,6 +27,11 @@ import (
 
 var zonePathSegment = regexp.MustCompile(`/zones/([^/]+)`)
 var machineTypePathSegment = regexp.MustCompile(`/machineTypes/([^/]+)$`)
+
+// bootDeviceName is the deviceName we set on the template boot disk so
+// per-selection disk overrides can merge against it (GCP merges by
+// deviceName).
+const bootDeviceName = "boot"
 
 // createInstanceViaBulkInsert provisions a single VM via
 // RegionInstances.BulkInsert with the configured location and flex
@@ -52,7 +58,11 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 	if policy := c.buildLocationPolicy(); policy != nil {
 		req.LocationPolicy = policy
 	}
-	if flex := c.buildInstanceFlexibilityPolicy(); flex != nil {
+	flex, err := c.buildInstanceFlexibilityPolicy(d)
+	if err != nil {
+		return err
+	}
+	if flex != nil {
 		req.InstanceFlexibilityPolicy = flex
 	}
 
@@ -95,16 +105,16 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver) (*raw.Instanc
 		return nil, err
 	}
 
-	// MachineType is a bare name (no zonal URL); bulkInsert resolves it
-	// against the placement zone, and flex selections override it.
+	// DeviceName is set so flex selections can override the boot disk
+	// by matching the same key (GCP merges by deviceName).
 	props := &raw.InstanceProperties{
 		Description:    "docker host vm",
-		MachineType:    d.MachineType,
 		MinCpuPlatform: c.minCPUPlatform,
 		Disks: []*raw.AttachedDisk{
 			{
 				Boot:       true,
 				AutoDelete: true,
+				DeviceName: bootDeviceName,
 				Type:       "PERSISTENT",
 				Mode:       "READ_WRITE",
 				InitializeParams: &raw.AttachedDiskInitializeParams{
@@ -202,26 +212,125 @@ func parseLocationZoneEntry(entry string) (zone, preference string) {
 	return entry, "ALLOW"
 }
 
-// buildInstanceFlexibilityPolicy returns nil when no flex types are
-// configured. Each --google-flex-machine-type becomes one InstanceSelection
-// with rank = occurrence order. Selection keys are "rank-N" so GCP error
-// messages refer back to the operator's input order.
-func (c *ComputeUtil) buildInstanceFlexibilityPolicy() *raw.InstanceFlexibilityPolicy {
-	if len(c.flexMachineTypes) == 0 {
-		return nil
+// flexSelection is one --google-flex-selection entry after parsing.
+type flexSelection struct {
+	MachineType    string
+	DiskType       string
+	DiskIops       int64
+	DiskThroughput int64
+}
+
+// parseFlexSelectionEntry parses a comma-separated key=value list.
+// machine-type is required; unknown keys are warned and ignored.
+func parseFlexSelectionEntry(entry string) (flexSelection, error) {
+	var sel flexSelection
+	seen := map[string]bool{}
+	for _, kv := range strings.Split(entry, ",") {
+		kv = strings.TrimSpace(kv)
+		if kv == "" {
+			continue
+		}
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 {
+			return sel, fmt.Errorf("element %q is not key=value", kv)
+		}
+		k := strings.TrimSpace(parts[0])
+		v := strings.TrimSpace(parts[1])
+		if seen[k] {
+			return sel, fmt.Errorf("duplicate key %q", k)
+		}
+		seen[k] = true
+		switch k {
+		case "machine-type":
+			if v == "" {
+				return sel, fmt.Errorf("empty value for key %q", k)
+			}
+			sel.MachineType = v
+		case "disk-type":
+			if v == "" {
+				return sel, fmt.Errorf("empty value for key %q", k)
+			}
+			sel.DiskType = v
+		case "disk-iops":
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 {
+				return sel, fmt.Errorf("disk-iops %q is not a non-negative integer", v)
+			}
+			sel.DiskIops = n
+		case "disk-throughput":
+			n, err := strconv.ParseInt(v, 10, 64)
+			if err != nil || n < 0 {
+				return sel, fmt.Errorf("disk-throughput %q is not a non-negative integer", v)
+			}
+			sel.DiskThroughput = n
+		default:
+			log.Warnf("--google-flex-selection: ignoring unknown key %q in %q", k, entry)
+		}
+	}
+	if sel.MachineType == "" {
+		return sel, fmt.Errorf("missing required key machine-type")
+	}
+	if sel.DiskType == "" && (seen["disk-iops"] || seen["disk-throughput"]) {
+		return sel, fmt.Errorf("disk-iops/disk-throughput require disk-type")
+	}
+	return sel, nil
+}
+
+// buildInstanceFlexibilityPolicy returns nil when no flex selections
+// are configured. Each --google-flex-selection becomes one
+// InstanceSelection with rank = occurrence order. Selection keys are
+// "rank-N" so GCP error messages refer back to the operator's input
+// order. Entries with a "disk-type" key attach a disk override.
+func (c *ComputeUtil) buildInstanceFlexibilityPolicy(d *Driver) (*raw.InstanceFlexibilityPolicy, error) {
+	if len(c.flexSelections) == 0 {
+		return nil, nil
 	}
 
-	selections := make(map[string]raw.InstanceFlexibilityPolicyInstanceSelection, len(c.flexMachineTypes))
-	for i, mt := range c.flexMachineTypes {
+	selections := make(map[string]raw.InstanceFlexibilityPolicyInstanceSelection, len(c.flexSelections))
+	for i, entry := range c.flexSelections {
+		sel, err := parseFlexSelectionEntry(entry)
+		if err != nil {
+			return nil, fmt.Errorf("--google-flex-selection %q: %w", entry, err)
+		}
 		key := fmt.Sprintf("rank-%d", i)
-		selections[key] = raw.InstanceFlexibilityPolicyInstanceSelection{
-			MachineTypes: []string{mt},
+		instSel := raw.InstanceFlexibilityPolicyInstanceSelection{
+			MachineTypes: []string{sel.MachineType},
 			Rank:         int64(i),
 		}
+		if sel.DiskType != "" {
+			instSel.Disks = []*raw.AttachedDisk{buildSelectionDiskOverride(d, sel)}
+		}
+		selections[key] = instSel
 	}
 	return &raw.InstanceFlexibilityPolicy{
 		InstanceSelections: selections,
+	}, nil
+}
+
+// buildSelectionDiskOverride mirrors the template's boot disk (image,
+// size, labels) with disk-type, IOPS, and throughput from the parsed
+// selection. Merged with the template by DeviceName.
+func buildSelectionDiskOverride(d *Driver, sel flexSelection) *raw.AttachedDisk {
+	disk := &raw.AttachedDisk{
+		Boot:       true,
+		AutoDelete: true,
+		DeviceName: bootDeviceName,
+		Type:       "PERSISTENT",
+		Mode:       "READ_WRITE",
+		InitializeParams: &raw.AttachedDiskInitializeParams{
+			SourceImage: "https://www.googleapis.com/compute/v1/projects/" + d.MachineImage,
+			DiskSizeGb:  int64(d.DiskSize),
+			DiskType:    sel.DiskType,
+			Labels:      parseLabels(d),
+		},
 	}
+	if sel.DiskIops > 0 {
+		disk.InitializeParams.ProvisionedIops = sel.DiskIops
+	}
+	if sel.DiskThroughput > 0 {
+		disk.InitializeParams.ProvisionedThroughput = sel.DiskThroughput
+	}
+	return disk
 }
 
 // discoverInstanceZone finds the zone GCP placed our just-created
@@ -268,6 +377,7 @@ func (c *ComputeUtil) finishPostCreate(d *Driver) error {
 	}
 
 	c.syncResolvedMachineType(d, instance)
+	log.Infof("bulkInsert placed as %s in %s", d.ResolvedMachineType, d.ResolvedZone)
 
 	if err := c.addFirewallTag(instance); err != nil {
 		return fmt.Errorf("adding firewall tag to bulkInsert instance %q: %w", c.instanceName, err)
@@ -318,16 +428,11 @@ func machineTypeFromInstanceURL(rawURL string) (string, error) {
 	return m[1], nil
 }
 
-// warnAboutMachineTypeInBulkInsertMode surfaces the interaction between
-// --google-machine-type and --google-flex-machine-type. Flags that
-// bulkInsert outright rejects (--google-address) are blocked at
-// flag-validation time, not warned about here.
+// warnAboutMachineTypeInBulkInsertMode flags --google-machine-type as
+// shadowed in bulkInsert mode (machine-type comes from each
+// --google-flex-selection entry).
 func (c *ComputeUtil) warnAboutMachineTypeInBulkInsertMode(d *Driver) {
-	if len(d.FlexMachineTypes) == 0 {
-		log.Warnf("bulkInsert without --google-flex-machine-type: falling back to --google-machine-type=%q. No machine-type fallback on stockout.", d.MachineType)
-		return
-	}
 	if d.MachineType != "" && d.MachineType != defaultMachineType {
-		log.Warnf("--google-machine-type=%q is ignored in bulkInsert mode when --google-flex-machine-type is set; only the flex list is honoured.", d.MachineType)
+		log.Warnf("--google-machine-type=%q is ignored in bulkInsert mode; only --google-flex-selection is honoured.", d.MachineType)
 	}
 }
