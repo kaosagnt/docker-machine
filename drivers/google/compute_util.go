@@ -53,8 +53,8 @@ type ComputeUtil struct {
 	regionExplicit string
 
 	// bulkInsert policy inputs (empty in direct mode).
-	flexMachineTypes []string
-	locationZones    []string
+	flexSelections []string
+	locationZones  []string
 
 	operationBackoffFactory *backoffFactory
 }
@@ -129,7 +129,7 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		maintenancePolicy:       driver.MaintenancePolicy,
 		skipFirewall:            driver.SkipFirewall,
 		regionExplicit:          driver.Region,
-		flexMachineTypes:        driver.FlexMachineTypes,
+		flexSelections:          driver.FlexSelections,
 		locationZones:           driver.LocationZones,
 	}, nil
 }
