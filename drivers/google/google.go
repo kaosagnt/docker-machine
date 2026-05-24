@@ -40,30 +40,61 @@ func (bf *backoffFactory) create() *backoff.ExponentialBackOff {
 // Driver is a struct compatible with the docker.hosts.drivers.Driver interface.
 type Driver struct {
 	*drivers.BaseDriver
-	Zone              string
-	MachineType       string
-	MinCPUPlatform    string
-	MachineImage      string
-	DiskType          string
-	Address           string
-	Network           string
-	Subnetwork        string
-	Preemptible       bool
-	UseInternalIP     bool
-	UseInternalIPOnly bool
-	ServiceAccount    string
-	Scopes            string
-	DiskSize          int
-	Project           string
-	Tags              string
-	UseExisting       bool
-	OpenPorts         []string
-	Labels            []string
-	Metadata          metadataMap
-	MetadataFromFile  metadataMap
-	Accelerator       string
-	MaintenancePolicy string
-	SkipFirewall      bool
+	Zone                  string
+	MachineType           string
+	MinCPUPlatform        string
+	MachineImage          string
+	DiskType              string
+	Address               string
+	Network               string
+	Subnetwork            string
+	Preemptible           bool
+	UseInternalIP         bool
+	UseInternalIPOnly     bool
+	ServiceAccount        string
+	Scopes                string
+	DiskSize              int
+	ProvisionedIops       int
+	ProvisionedThroughput int
+	Project               string
+	Tags                  string
+	UseExisting           bool
+	OpenPorts             []string
+	Labels                []string
+	Metadata              metadataMap
+	MetadataFromFile      metadataMap
+	Accelerator           string
+	MaintenancePolicy     string
+	SkipFirewall          bool
+
+	// BulkInsert is the explicit opt-in for bulkInsert mode. Separate
+	// boolean rather than inferred from Region: keeps the provisioning
+	// channel grep-able in config and on-disk Driver state.
+	BulkInsert bool
+
+	// Region is required when BulkInsert is true; ignored otherwise.
+	// The actual zone is chosen by GCP at create time from LocationZones
+	// and written back to ResolvedZone after placement.
+	Region string
+
+	// FlexSelections feeds InstanceFlexibilityPolicy.InstanceSelections.
+	// First entry = rank 0; format documented on --google-flex-selection.
+	FlexSelections []string
+
+	// LocationZones constrains zone selection. Each entry is
+	// "zone[:PREFERENCE]" (ALLOW / PREFERRED / DENY); empty means GCP
+	// picks any zone in Region.
+	LocationZones []string
+
+	// ResolvedZone and ResolvedMachineType carry the values GCP actually
+	// picked, populated by syncDriverStateFromInstance after a successful
+	// create. Empty in direct mode (Zone / MachineType are reality there).
+	// ComputeUtil construction prefers ResolvedZone over Zone so per-
+	// instance operations target the right zone after reload from disk;
+	// gitlab-runner!6740 reads ResolvedMachineType for the target_*
+	// metric labels.
+	ResolvedZone        string
+	ResolvedMachineType string
 
 	OperationBackoffFactory *backoffFactory
 }
@@ -152,6 +183,16 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "GCE Instance Disk type",
 			Value:  defaultDiskType,
 			EnvVar: "GOOGLE_DISK_TYPE",
+		},
+		mcnflag.IntFlag{
+			Name:   "google-provisioned-iops",
+			Usage:  "GCE Hyperdisk provisioned IOPS (applies to Hyperdisk disk types; not consumed by non-Hyperdisk types)",
+			EnvVar: "GOOGLE_PROVISIONED_IOPS",
+		},
+		mcnflag.IntFlag{
+			Name:   "google-provisioned-throughput",
+			Usage:  "GCE Hyperdisk provisioned throughput in MiB/s (applies to Hyperdisk disk types; not consumed by non-Hyperdisk types)",
+			EnvVar: "GOOGLE_PROVISIONED_THROUGHPUT",
 		},
 		mcnflag.StringFlag{
 			Name:   "google-network",
@@ -254,6 +295,26 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "Skip firewall setup",
 			EnvVar: "GOOGLE_SKIP_FIREWALL_CREATE",
 		},
+		mcnflag.BoolFlag{
+			Name:   "google-bulk-insert",
+			Usage:  "(Experimental) Provision via RegionInstances.BulkInsert with LocationPolicy / InstanceFlexibilityPolicy rather than zonal Instances.Insert. Requires --google-region; mutually exclusive with --google-zone.",
+			EnvVar: "GOOGLE_BULK_INSERT",
+		},
+		mcnflag.StringFlag{
+			Name:   "google-region",
+			Usage:  "(Experimental) GCP region for bulkInsert mode. Required when --google-bulk-insert is set.",
+			EnvVar: "GOOGLE_REGION",
+		},
+		mcnflag.StringSliceFlag{
+			Name:   "google-flex-selection",
+			Usage:  "(Experimental) Selection for bulkInsert flex policy. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput attach a disk override. Repeat in preference order: first occurrence is rank 0 (most preferred). Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Requires --google-region.",
+			EnvVar: "GOOGLE_FLEX_SELECTION",
+		},
+		mcnflag.StringSliceFlag{
+			Name:   "google-location-zone",
+			Usage:  "(Experimental) Zone constraint for bulkInsert. Format: zone[:PREFERENCE] where preference is ALLOW (default), PREFERRED, or DENY. Repeat per zone. Empty = any zone in --google-region.",
+			EnvVar: "GOOGLE_LOCATION_ZONE",
+		},
 	}
 }
 
@@ -312,6 +373,16 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		d.MachineImage = strings.TrimPrefix(d.MachineImage, "https://www.googleapis.com/compute/v1/projects/")
 		d.DiskSize = flags.Int("google-disk-size")
 		d.DiskType = flags.String("google-disk-type")
+		provisionedIops := flags.Int("google-provisioned-iops")
+		if provisionedIops < 0 {
+			return fmt.Errorf("google-provisioned-iops must be >= 0, got %d", provisionedIops)
+		}
+		provisionedThroughput := flags.Int("google-provisioned-throughput")
+		if provisionedThroughput < 0 {
+			return fmt.Errorf("google-provisioned-throughput must be >= 0, got %d", provisionedThroughput)
+		}
+		d.ProvisionedIops = provisionedIops
+		d.ProvisionedThroughput = provisionedThroughput
 		d.Address = flags.String("google-address")
 		d.Network = flags.String("google-network")
 		d.Subnetwork = flags.String("google-subnetwork")
@@ -332,6 +403,50 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.SSHUser = flags.String("google-username")
 	d.SSHPort = 22
 	d.SetSwarmConfigFromFlags(flags)
+
+	d.BulkInsert = flags.Bool("google-bulk-insert")
+	d.Region = flags.String("google-region")
+	d.FlexSelections = flags.StringSlice("google-flex-selection")
+	d.LocationZones = flags.StringSlice("google-location-zone")
+
+	if d.BulkInsert {
+		if d.UseExisting {
+			return errors.New("--google-bulk-insert and --google-use-existing are mutually exclusive: bulkInsert provisions a new VM")
+		}
+		if d.Region == "" {
+			return errors.New("--google-bulk-insert requires --google-region")
+		}
+		if len(d.FlexSelections) == 0 {
+			return errors.New("--google-bulk-insert requires at least one --google-flex-selection")
+		}
+		if d.Zone != "" && d.Zone != defaultZone {
+			return errors.New("--google-bulk-insert and --google-zone are mutually exclusive: bulkInsert picks the zone from --google-location-zone")
+		}
+		if d.Address != "" {
+			return errors.New("--google-address is not supported with --google-bulk-insert: bulkInsert does not accept custom external IPs")
+		}
+		for _, entry := range d.FlexSelections {
+			if strings.TrimSpace(entry) == "" {
+				return errors.New("--google-flex-selection entries must be non-empty")
+			}
+			if _, err := parseFlexSelectionEntry(entry); err != nil {
+				return fmt.Errorf("--google-flex-selection %q: %w", entry, err)
+			}
+		}
+		for _, entry := range d.LocationZones {
+			zone, _ := parseLocationZoneEntry(entry)
+			if strings.TrimSpace(zone) == "" {
+				return fmt.Errorf("--google-location-zone entry %q has an empty zone (expected zone[:PREFERENCE])", entry)
+			}
+		}
+	} else {
+		if len(d.FlexSelections) > 0 {
+			return errors.New("--google-flex-selection requires --google-bulk-insert")
+		}
+		if len(d.LocationZones) > 0 {
+			return errors.New("--google-location-zone requires --google-bulk-insert")
+		}
+	}
 
 	backoffRandomizationFactor, err := strconv.ParseFloat(flags.String("google-operation-backoff-randomization-factor"), 64)
 	if err != nil {
@@ -398,6 +513,10 @@ func (d *Driver) PreCreateCheck() error {
 	}
 
 	return nil
+}
+
+func (d *Driver) usesBulkInsert() bool {
+	return d.BulkInsert
 }
 
 // Create creates a GCE VM instance acting as a docker host.
@@ -503,6 +622,11 @@ func (d *Driver) Start() error {
 	}
 
 	if instance == nil {
+		// bulkInsert can't reuse the existing disk: a fresh BulkInsert
+		// picks a new zone and builds a new disk, orphaning the old one.
+		if d.usesBulkInsert() {
+			return fmt.Errorf("instance %q not found and --google-bulk-insert mode does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
+		}
 		if err = c.createInstance(d); err != nil {
 			return err
 		}
