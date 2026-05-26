@@ -578,10 +578,10 @@ func TestEffectiveZone(t *testing.T) {
 func TestDeleteInstanceWithUnresolvedZone(t *testing.T) {
 	tests := map[string]struct {
 		// handler responds to aggregatedList (and optional delete) calls.
-		handler        http.HandlerFunc
-		wantNotFound   bool // expect *googleapi.Error{Code:404}
-		wantSuccess    bool // expect no error after successful delete
-		wantZoneAfter  string
+		handler       http.HandlerFunc
+		wantNotFound  bool // expect *googleapi.Error{Code:404}
+		wantSuccess   bool // expect no error after successful delete
+		wantZoneAfter string
 	}{
 		"aggregated list returns the instance in us-east1-c, delete then succeeds": {
 			handler: func(w http.ResponseWriter, r *http.Request) {
