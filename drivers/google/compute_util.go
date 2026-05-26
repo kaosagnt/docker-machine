@@ -55,6 +55,7 @@ type ComputeUtil struct {
 	// bulkInsert policy inputs (empty in direct mode).
 	flexSelections []string
 	locationZones  []string
+	bulkInsert     bool
 
 	operationBackoffFactory *backoffFactory
 }
@@ -131,6 +132,7 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		regionExplicit:          driver.Region,
 		flexSelections:          driver.FlexSelections,
 		locationZones:           driver.LocationZones,
+		bulkInsert:          driver.usesBulkInsert(),
 	}, nil
 }
 
@@ -638,19 +640,19 @@ func parseLabels(d *Driver) map[string]string {
 }
 
 // deleteInstance deletes the instance, leaving the persistent disk.
-// Direct and bulkInsert modes both converge on Instances.Delete here;
-// effectiveZone resolves c.zone to the placed zone before we get here.
 //
-// If c.zone is empty (bulkInsert create failed before
-// discoverInstanceZone() ran — e.g. VM_MIN_COUNT_NOT_REACHED) we
-// recover by re-running the same AggregatedList lookup the create
-// path uses. If found, the placed VM gets cleaned up correctly. If
-// not found anywhere in the project, we return a 404 so
-// Driver.Remove's isNotFound short-circuit drops the local state
-// rather than retrying forever.
+// Recovers from the empty-zone state that bulkInsert can leave behind
+// when create fails after placement (e.g. VM_MIN_COUNT_NOT_REACHED):
+// without recovery, every subsequent delete would fail with "zone
+// unresolved" indefinitely, holding a goroutine and an idle slot per
+// stuck machine. Direct mode treats empty zone as a programming bug
+// worth surfacing, not a race to recover from.
 func (c *ComputeUtil) deleteInstance() error {
 	if c.zone == "" {
-		log.Warnf("Zone unresolved for %q (likely a failed bulkInsert before discovery); attempting AggregatedList lookup to recover.", c.instanceName)
+		if !c.bulkInsert {
+			return fmt.Errorf("cannot delete instance %q: zone unresolved in direct mode (Driver.Zone should always be set from --google-zone here)", c.instanceName)
+		}
+		log.Warnf("Zone unresolved for %q after a failed bulkInsert; attempting AggregatedList lookup to recover.", c.instanceName)
 		zone, err := c.discoverInstanceZone()
 		if err != nil {
 			log.Warnf("AggregatedList lookup for %q did not find a placed instance (%v); treating as not-found so local state can be reaped.", c.instanceName, err)

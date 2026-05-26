@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	raw "google.golang.org/api/compute/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
@@ -566,102 +567,109 @@ func TestEffectiveZone(t *testing.T) {
 	}
 }
 
-// TestDeleteInstanceWithUnresolvedZone covers the bulkInsert failure
-// path where a create failed before discoverInstanceZone() ran (e.g.
-// VM_MIN_COUNT_NOT_REACHED). c.zone is empty; deleteInstance should:
-//
-//   - Re-run AggregatedList to recover the placed instance's zone and
-//     proceed with delete, OR
-//   - If the instance is not found anywhere, return a 404 so
-//     Driver.Remove's isNotFound short-circuit drops the local state
-//     instead of retrying forever.
-func TestDeleteInstanceWithUnresolvedZone(t *testing.T) {
-	tests := map[string]struct {
-		// handler responds to aggregatedList (and optional delete) calls.
-		handler       http.HandlerFunc
-		wantNotFound  bool // expect *googleapi.Error{Code:404}
-		wantSuccess   bool // expect no error after successful delete
-		wantZoneAfter string
-	}{
-		"aggregated list returns the instance in us-east1-c, delete then succeeds": {
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				if strings.Contains(r.URL.Path, "/aggregated/instances") {
-					resp := raw.InstanceAggregatedList{
-						Items: map[string]raw.InstancesScopedList{
-							"zones/us-east1-c": {
-								Instances: []*raw.Instance{
-									{
-										Name: "runner-abc",
-										Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
-									},
-								},
+func newUnresolvedZoneComputeUtil(t *testing.T, srv *httptest.Server) *ComputeUtil {
+	t.Helper()
+	svc, err := raw.NewService(context.Background(), option.WithoutAuthentication(), option.WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &ComputeUtil{
+		instanceName: "runner-abc",
+		project:      "p",
+		service:      svc,
+		bulkInsert:   true,
+		operationBackoffFactory: &backoffFactory{
+			InitialInterval:     10 * time.Millisecond,
+			RandomizationFactor: 0,
+			Multiplier:          2,
+			MaxInterval:         100 * time.Millisecond,
+			MaxElapsedTime:      time.Second,
+		},
+	}
+}
+
+func TestDeleteInstance_RecoversZoneViaAggregatedList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/aggregated/instances") {
+			resp := raw.InstanceAggregatedList{
+				Items: map[string]raw.InstancesScopedList{
+					"zones/us-east1-c": {
+						Instances: []*raw.Instance{
+							{
+								Name: "runner-abc",
+								Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
 							},
 						},
-					}
-					body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
-					fmt.Fprint(w, body)
-					return
-				}
-				// Delete + waitForRegionalOp both expect an Operation.
-				op := raw.Operation{Name: "op-1", Status: "DONE"}
-				body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
-				fmt.Fprint(w, body)
-			},
-			wantSuccess:   true,
-			wantZoneAfter: "us-east1-c",
-		},
-		"aggregated list finds nothing, return 404 so isNotFound short-circuits": {
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				if strings.Contains(r.URL.Path, "/aggregated/instances") {
-					resp := raw.InstanceAggregatedList{
-						Items: map[string]raw.InstancesScopedList{},
-					}
-					body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
-					fmt.Fprint(w, body)
-					return
-				}
-				t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
-			},
-			wantNotFound: true,
-		},
-	}
-
-	for tn, tt := range tests {
-		t.Run(tn, func(t *testing.T) {
-			srv := httptest.NewServer(tt.handler)
-			defer srv.Close()
-
-			svc, err := raw.NewService(context.Background(), option.WithoutAuthentication(), option.WithEndpoint(srv.URL))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			c := &ComputeUtil{
-				instanceName: "runner-abc",
-				project:      "p",
-				service:      svc,
-				operationBackoffFactory: &backoffFactory{
-					InitialInterval:     10 * time.Millisecond,
-					RandomizationFactor: 0,
-					Multiplier:          2,
-					MaxInterval:         100 * time.Millisecond,
-					MaxElapsedTime:      time.Second,
+					},
 				},
 			}
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+			fmt.Fprint(w, body)
+			return
+		}
+		// Delete must target the recovered zone (operation-wait URL
+		// doesn't include /instances/, so this only checks Delete).
+		if strings.Contains(r.URL.Path, "/instances/runner-abc") &&
+			!strings.Contains(r.URL.Path, "/zones/us-east1-c/instances/runner-abc") {
+			t.Errorf("delete should target us-east1-c; got %s", r.URL.Path)
+		}
+		op := raw.Operation{Name: "op-1", Status: "DONE"}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
 
-			err = c.deleteInstance()
+	c := newUnresolvedZoneComputeUtil(t, srv)
 
-			if tt.wantNotFound {
-				if assert.Error(t, err) {
-					assert.True(t, isNotFound(err), "expected *googleapi.Error{Code:404} so Driver.Remove's isNotFound fires; got %T: %v", err, err)
-				}
-				return
+	require.NoError(t, c.deleteInstance())
+	assert.Equal(t, "us-east1-c", c.zone)
+	// deleteDisk reads c.zoneURL, not c.zone — they must stay in sync.
+	assert.Contains(t, c.zoneURL, "/zones/us-east1-c")
+}
+
+func TestDeleteInstance_UnresolvedZoneReturns404(t *testing.T) {
+	tests := map[string]http.HandlerFunc{
+		"aggregated list returns empty": func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+				t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
 			}
-
-			if tt.wantSuccess {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.wantZoneAfter, c.zone, "deleteInstance should record the recovered zone for subsequent calls (e.g. deleteDisk)")
+			resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+			fmt.Fprint(w, body)
+		},
+		"aggregated list returns HTTP 403": func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+				t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
 			}
+			http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
+		},
+	}
+
+	for tn, handler := range tests {
+		t.Run(tn, func(t *testing.T) {
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
+
+			c := newUnresolvedZoneComputeUtil(t, srv)
+
+			err := c.deleteInstance()
+
+			require.Error(t, err)
+			assert.True(t, isNotFound(err), "got %T: %v", err, err)
 		})
 	}
+}
+
+func TestDeleteInstance_DirectModeUnresolvedZoneReturnsError(t *testing.T) {
+	c := &ComputeUtil{
+		instanceName:   "runner-abc",
+		project:        "p",
+		bulkInsert: false,
+	}
+
+	err := c.deleteInstance()
+
+	require.Error(t, err)
+	assert.False(t, isNotFound(err), "direct mode must not synthesise a 404")
+	assert.Contains(t, err.Error(), "direct mode")
 }
