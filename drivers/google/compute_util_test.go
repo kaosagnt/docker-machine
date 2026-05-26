@@ -662,9 +662,9 @@ func TestDeleteInstance_UnresolvedZoneReturns404(t *testing.T) {
 
 func TestDeleteInstance_DirectModeUnresolvedZoneReturnsError(t *testing.T) {
 	c := &ComputeUtil{
-		instanceName:   "runner-abc",
-		project:        "p",
-		bulkInsert: false,
+		instanceName: "runner-abc",
+		project:      "p",
+		bulkInsert:   false,
 	}
 
 	err := c.deleteInstance()

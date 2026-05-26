@@ -314,7 +314,7 @@ func TestBuildBulkInsertInstanceProperties_BareNamesNoZone(t *testing.T) {
 func TestUsesBulkInsert(t *testing.T) {
 	t.Run("default direct mode", func(t *testing.T) {
 		d := &Driver{}
-		assert.False(t, d.usesBulkInsert())
+		assert.False(t, d.BulkInsert)
 	})
 	t.Run("region alone is not enough", func(t *testing.T) {
 		// Explicit opt-in is required: Region without --google-bulk-insert
@@ -322,10 +322,10 @@ func TestUsesBulkInsert(t *testing.T) {
 		// when an operator only meant to set a region for some
 		// hypothetical future feature.
 		d := &Driver{Region: "us-east1"}
-		assert.False(t, d.usesBulkInsert())
+		assert.False(t, d.BulkInsert)
 	})
 	t.Run("BulkInsert opt-in flips mode", func(t *testing.T) {
 		d := &Driver{BulkInsert: true, Region: "us-east1"}
-		assert.True(t, d.usesBulkInsert())
+		assert.True(t, d.BulkInsert)
 	})
 }

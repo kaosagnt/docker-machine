@@ -132,7 +132,7 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		regionExplicit:          driver.Region,
 		flexSelections:          driver.FlexSelections,
 		locationZones:           driver.LocationZones,
-		bulkInsert:          driver.usesBulkInsert(),
+		bulkInsert:              driver.BulkInsert,
 	}, nil
 }
 
@@ -351,9 +351,9 @@ func (c *ComputeUtil) instance() (*raw.Instance, error) {
 // RegionInstances.BulkInsert. The bulkInsert path supports a zone
 // preference list (LocationPolicy) and a ranked machine-type fallback
 // (InstanceFlexibilityPolicy); GCP picks the first combination it can
-// fulfil. See Driver.usesBulkInsert.
+// fulfil.
 func (c *ComputeUtil) createInstance(d *Driver) error {
-	if d.usesBulkInsert() {
+	if d.BulkInsert {
 		return c.createInstanceViaBulkInsert(d)
 	}
 
