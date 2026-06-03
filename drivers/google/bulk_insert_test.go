@@ -32,10 +32,15 @@ func TestParseLocationZoneEntry(t *testing.T) {
 	}
 }
 
-func TestBuildLocationPolicy_Nil(t *testing.T) {
-	// No zones → nil policy, GCP picks any zone in the region.
+func TestBuildLocationPolicy_NoZones(t *testing.T) {
+	// No zones → still emit a policy carrying TargetShape=ANY with an
+	// empty Locations map, so GCP considers every zone in the region
+	// rather than falling back to the ANY_SINGLE_ZONE default.
 	c := &ComputeUtil{}
-	assert.Nil(t, c.buildLocationPolicy())
+	p := c.buildLocationPolicy()
+	require.NotNil(t, p)
+	assert.Equal(t, "ANY", p.TargetShape)
+	assert.Empty(t, p.Locations)
 }
 
 func TestBuildLocationPolicy_Zones(t *testing.T) {
@@ -44,7 +49,10 @@ func TestBuildLocationPolicy_Zones(t *testing.T) {
 	}
 	p := c.buildLocationPolicy()
 	require.NotNil(t, p)
-	assert.Empty(t, p.TargetShape)
+	// TargetShape=ANY is load-bearing: the bulkInsert default
+	// (ANY_SINGLE_ZONE) pins placement to one zone and fails on
+	// stockout without trying the other allowed zones.
+	assert.Equal(t, "ANY", p.TargetShape)
 	require.Len(t, p.Locations, 3)
 	assert.Equal(t, "ALLOW", p.Locations["zones/us-east1-b"].Preference)
 	assert.Equal(t, "PREFERRED", p.Locations["zones/us-east1-c"].Preference)
