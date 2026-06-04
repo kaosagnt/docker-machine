@@ -436,7 +436,15 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 			}
 		}
 		for _, entry := range d.LocationZones {
-			zone, _ := parseLocationZoneEntry(entry)
+			// Split off the zone directly rather than via
+			// parseLocationZoneEntry: the latter warns on invalid
+			// preferences, and calling it here too would emit that
+			// warning twice (once at config validation, once at create).
+			// The create-time call in buildLocationPolicy owns the warning.
+			zone := entry
+			if i := strings.IndexByte(entry, ':'); i >= 0 {
+				zone = entry[:i]
+			}
 			if strings.TrimSpace(zone) == "" {
 				return fmt.Errorf("--google-location-zone entry %q has an empty zone (expected zone[:PREFERENCE])", entry)
 			}
