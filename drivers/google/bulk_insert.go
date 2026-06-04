@@ -210,13 +210,25 @@ func (c *ComputeUtil) buildLocationPolicy() *raw.LocationPolicy {
 }
 
 // parseLocationZoneEntry splits "zone[:preference]"; defaults to ALLOW.
-// Unknown preferences pass through verbatim — GCP rejects them with a
-// clear error message rather than us silently coercing.
+//
+// bulkInsert's locationPolicy.locations[].preference only accepts ALLOW
+// or DENY (PREFERRED is a MIG distributionPolicy concept that does not
+// exist for bulkInsert). Any other value — including PREFERRED — is
+// coerced to ALLOW with a warning rather than passed through: GCE does
+// not reliably reject an invalid preference, so passing it verbatim
+// yields undefined placement behaviour rather than a clear error.
 func parseLocationZoneEntry(entry string) (zone, preference string) {
+	zone = entry
+	preference = "ALLOW"
 	if i := strings.IndexByte(entry, ':'); i >= 0 {
-		return entry[:i], strings.ToUpper(entry[i+1:])
+		zone = entry[:i]
+		preference = strings.ToUpper(entry[i+1:])
 	}
-	return entry, "ALLOW"
+	if preference != "ALLOW" && preference != "DENY" {
+		log.Warnf("--google-location-zone %q: preference %q is not valid for bulkInsert (only ALLOW or DENY); coercing to ALLOW.", entry, preference)
+		preference = "ALLOW"
+	}
+	return zone, preference
 }
 
 // flexSelection is one --google-flex-selection entry after parsing.
