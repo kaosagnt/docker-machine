@@ -55,6 +55,7 @@ type ComputeUtil struct {
 	// bulkInsert policy inputs (empty in direct mode).
 	flexSelections []string
 	locationZones  []string
+	bulkInsert     bool
 
 	operationBackoffFactory *backoffFactory
 }
@@ -131,6 +132,7 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		regionExplicit:          driver.Region,
 		flexSelections:          driver.FlexSelections,
 		locationZones:           driver.LocationZones,
+		bulkInsert:              driver.BulkInsert,
 	}, nil
 }
 
@@ -349,9 +351,9 @@ func (c *ComputeUtil) instance() (*raw.Instance, error) {
 // RegionInstances.BulkInsert. The bulkInsert path supports a zone
 // preference list (LocationPolicy) and a ranked machine-type fallback
 // (InstanceFlexibilityPolicy); GCP picks the first combination it can
-// fulfil. See Driver.usesBulkInsert.
+// fulfil.
 func (c *ComputeUtil) createInstance(d *Driver) error {
-	if d.usesBulkInsert() {
+	if d.BulkInsert {
 		return c.createInstanceViaBulkInsert(d)
 	}
 
@@ -638,11 +640,30 @@ func parseLabels(d *Driver) map[string]string {
 }
 
 // deleteInstance deletes the instance, leaving the persistent disk.
-// Direct and bulkInsert modes both converge on Instances.Delete here;
-// effectiveZone resolves c.zone to the placed zone before we get here.
+//
+// Recovers from the empty-zone state that bulkInsert can leave behind
+// when create fails after placement (e.g. VM_MIN_COUNT_NOT_REACHED):
+// without recovery, every subsequent delete would fail with "zone
+// unresolved" indefinitely, holding a goroutine and an idle slot per
+// stuck machine. Direct mode treats empty zone as a programming bug
+// worth surfacing, not a race to recover from.
 func (c *ComputeUtil) deleteInstance() error {
 	if c.zone == "" {
-		return fmt.Errorf("cannot delete instance %q: zone unresolved (Driver.ResolvedZone / Driver.Zone both empty)", c.instanceName)
+		if !c.bulkInsert {
+			return fmt.Errorf("cannot delete instance %q: zone unresolved in direct mode (Driver.Zone should always be set from --google-zone here)", c.instanceName)
+		}
+		log.Warnf("Zone unresolved for %q after a failed bulkInsert; attempting AggregatedList lookup to recover.", c.instanceName)
+		zone, err := c.discoverInstanceZone()
+		if err != nil {
+			log.Warnf("AggregatedList lookup for %q did not find a placed instance (%v); treating as not-found so local state can be reaped.", c.instanceName, err)
+			return &googleapi.Error{
+				Code:    http.StatusNotFound,
+				Message: fmt.Sprintf("instance %q has no resolved zone and was not found by AggregatedList; nothing to delete", c.instanceName),
+			}
+		}
+		log.Infof("Recovered zone %q for %q via AggregatedList; proceeding with delete.", zone, c.instanceName)
+		c.zone = zone
+		c.zoneURL = apiURL + c.project + "/zones/" + zone
 	}
 
 	log.Infof("Deleting instance.")

@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	raw "google.golang.org/api/compute/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
@@ -563,4 +565,111 @@ func TestEffectiveZone(t *testing.T) {
 			assert.Equal(t, tt.want, effectiveZone(&tt.driver))
 		})
 	}
+}
+
+func newUnresolvedZoneComputeUtil(t *testing.T, srv *httptest.Server) *ComputeUtil {
+	t.Helper()
+	svc, err := raw.NewService(context.Background(), option.WithoutAuthentication(), option.WithEndpoint(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &ComputeUtil{
+		instanceName: "runner-abc",
+		project:      "p",
+		service:      svc,
+		bulkInsert:   true,
+		operationBackoffFactory: &backoffFactory{
+			InitialInterval:     10 * time.Millisecond,
+			RandomizationFactor: 0,
+			Multiplier:          2,
+			MaxInterval:         100 * time.Millisecond,
+			MaxElapsedTime:      time.Second,
+		},
+	}
+}
+
+func TestDeleteInstance_RecoversZoneViaAggregatedList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/aggregated/instances") {
+			resp := raw.InstanceAggregatedList{
+				Items: map[string]raw.InstancesScopedList{
+					"zones/us-east1-c": {
+						Instances: []*raw.Instance{
+							{
+								Name: "runner-abc",
+								Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
+							},
+						},
+					},
+				},
+			}
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+			fmt.Fprint(w, body)
+			return
+		}
+		// Delete must target the recovered zone (operation-wait URL
+		// doesn't include /instances/, so this only checks Delete).
+		if strings.Contains(r.URL.Path, "/instances/runner-abc") &&
+			!strings.Contains(r.URL.Path, "/zones/us-east1-c/instances/runner-abc") {
+			t.Errorf("delete should target us-east1-c; got %s", r.URL.Path)
+		}
+		op := raw.Operation{Name: "op-1", Status: "DONE"}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+
+	require.NoError(t, c.deleteInstance())
+	assert.Equal(t, "us-east1-c", c.zone)
+	// deleteDisk reads c.zoneURL, not c.zone — they must stay in sync.
+	assert.Contains(t, c.zoneURL, "/zones/us-east1-c")
+}
+
+func TestDeleteInstance_UnresolvedZoneReturns404(t *testing.T) {
+	tests := map[string]http.HandlerFunc{
+		"aggregated list returns empty": func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+				t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
+			}
+			resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+			fmt.Fprint(w, body)
+		},
+		"aggregated list returns HTTP 403": func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+				t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
+			}
+			http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
+		},
+	}
+
+	for tn, handler := range tests {
+		t.Run(tn, func(t *testing.T) {
+			srv := httptest.NewServer(handler)
+			defer srv.Close()
+
+			c := newUnresolvedZoneComputeUtil(t, srv)
+
+			err := c.deleteInstance()
+
+			require.Error(t, err)
+			assert.True(t, isNotFound(err), "got %T: %v", err, err)
+		})
+	}
+}
+
+func TestDeleteInstance_DirectModeUnresolvedZoneReturnsError(t *testing.T) {
+	c := &ComputeUtil{
+		instanceName: "runner-abc",
+		project:      "p",
+		bulkInsert:   false,
+	}
+
+	err := c.deleteInstance()
+
+	require.Error(t, err)
+	assert.False(t, isNotFound(err), "direct mode must not synthesise a 404")
+	assert.Contains(t, err.Error(), "direct mode")
 }

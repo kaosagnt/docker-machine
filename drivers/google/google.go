@@ -515,10 +515,6 @@ func (d *Driver) PreCreateCheck() error {
 	return nil
 }
 
-func (d *Driver) usesBulkInsert() bool {
-	return d.BulkInsert
-}
-
 // Create creates a GCE VM instance acting as a docker host.
 func (d *Driver) Create() error {
 	log.Infof("Generating SSH Key")
@@ -624,7 +620,7 @@ func (d *Driver) Start() error {
 	if instance == nil {
 		// bulkInsert can't reuse the existing disk: a fresh BulkInsert
 		// picks a new zone and builds a new disk, orphaning the old one.
-		if d.usesBulkInsert() {
+		if d.BulkInsert {
 			return fmt.Errorf("instance %q not found and --google-bulk-insert mode does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
 		}
 		if err = c.createInstance(d); err != nil {
