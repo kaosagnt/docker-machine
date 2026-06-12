@@ -15,6 +15,8 @@ package google
 // (firewall tag, SSH key).
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -62,6 +64,15 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 	}
 	if flex != nil {
 		req.InstanceFlexibilityPolicy = flex
+	}
+
+	reqDumpBuf := new(bytes.Buffer)
+	reqDumpEnc := json.NewEncoder(reqDumpBuf)
+	reqDumpEnc.SetIndent("", "  ")
+	if err = reqDumpEnc.Encode(req); err != nil {
+		log.Debugf("Failed to encode dump of bulkInsert request: %v", err)
+	} else {
+		log.Debugf("bulkInsert request: %s", reqDumpBuf)
 	}
 
 	op, err := c.service.RegionInstances.BulkInsert(c.project, c.region(), req).Do()
