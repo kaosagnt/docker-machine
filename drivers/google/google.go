@@ -299,7 +299,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.BoolFlag{
 			Name:   "google-bulk-insert",
-			Usage:  "(Experimental) Provision via RegionInstances.BulkInsert with LocationPolicy / InstanceFlexibilityPolicy rather than zonal Instances.Insert. Requires --google-region; mutually exclusive with --google-zone.",
+			Usage:  "(Experimental) Provision via RegionInstances.BulkInsert with a multi-zone LocationPolicy rather than zonal Instances.Insert. The driver issues one BulkInsert per --google-flex-selection entry in preference order, advancing to the next selection on stockout-class failures (VM_MIN_COUNT_NOT_REACHED, ZONE_RESOURCE_POOL_EXHAUSTED). With no --google-flex-selection a single selection is synthesised from --google-machine-type / --google-disk-type. Requires --google-region; mutually exclusive with --google-zone.",
 			EnvVar: "GOOGLE_BULK_INSERT",
 		},
 		mcnflag.StringFlag{
@@ -309,7 +309,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-flex-selection",
-			Usage:  "(Experimental) Selection for bulkInsert flex policy. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput attach a disk override. Repeat in preference order: first occurrence is rank 0 (most preferred). Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Requires --google-region.",
+			Usage:  "(Experimental) Candidate machine-type / disk spec for bulkInsert. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput override the boot disk for this entry. Repeat in preference order: first occurrence is tried first, subsequent entries are tried only if the previous one fails with a stockout-class error. Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Optional in bulkInsert mode: when omitted, a single selection is synthesised from --google-machine-type and --google-disk-type.",
 			EnvVar: "GOOGLE_FLEX_SELECTION",
 		},
 		mcnflag.StringSliceFlag{
@@ -417,9 +417,6 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		}
 		if d.Region == "" {
 			return errors.New("--google-bulk-insert requires --google-region")
-		}
-		if len(d.FlexSelections) == 0 {
-			return errors.New("--google-bulk-insert requires at least one --google-flex-selection")
 		}
 		if d.Zone != "" && d.Zone != defaultZone {
 			return errors.New("--google-bulk-insert and --google-zone are mutually exclusive: bulkInsert picks the zone from --google-location-zone")

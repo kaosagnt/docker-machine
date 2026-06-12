@@ -3,11 +3,23 @@ package google
 // bulkInsert provisioning path.
 //
 // When --google-bulk-insert is set, the usual zonal Instances.Insert
-// is replaced by a regional RegionInstances.BulkInsert. The single
-// request carries LocationPolicy (zone preference, from
-// --google-location-zone) and InstanceFlexibilityPolicy (ranked
-// machine-type fallback, from --google-flex-selection) so GCP
-// picks zone × machine-type per call.
+// is replaced by a regional RegionInstances.BulkInsert. The driver
+// issues ONE BulkInsert call per flex selection, in operator-given
+// preference order, each with count=1/minCount=1 and a LocationPolicy
+// that lets GCP pick the zone across --google-location-zone.
+//
+// We do NOT use InstanceFlexibilityPolicy. At count=1 its rank-fallback
+// is dead code: GCP commits to rank-0 up front and surfaces a generic
+// VM_MIN_COUNT_NOT_REACHED on stockout without trying the lower ranks.
+// We therefore implement selection fallback driver-side: each call
+// sets the machine type and disk spec directly in InstanceProperties,
+// and a stockout-class error from one call triggers the next.
+//
+// Two layers of fallback:
+//   - GCP picks the zone within a single selection (LocationPolicy
+//     with TargetShape=ANY across the configured zones).
+//   - The driver picks the next selection on stockout, until one
+//     succeeds or every selection has been tried.
 //
 // The Operation returned by BulkInsert is region-scoped and tells us
 // when GCP settled placement, but not where; we discover the chosen
@@ -17,6 +29,7 @@ package google
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -30,23 +43,103 @@ import (
 var zonePathSegment = regexp.MustCompile(`/zones/([^/]+)`)
 var machineTypePathSegment = regexp.MustCompile(`/machineTypes/([^/]+)$`)
 
-// bootDeviceName is the deviceName we set on the template boot disk so
-// per-selection disk overrides can merge against it (GCP merges by
-// deviceName).
+// bootDeviceName is the deviceName we set on the template boot disk.
+// Kept as a stable identifier so any tooling that inspects the disk
+// from outside the driver can rely on a known name.
 const bootDeviceName = "boot"
 
-// createInstanceViaBulkInsert provisions a single VM via
-// RegionInstances.BulkInsert with the configured location and flex
-// policies, waits for the operation to complete, discovers the chosen
-// zone, and hands off to the standard post-create configuration.
+// stockoutErrorCodes are GCE operation error codes we treat as
+// "try the next selection". Anything not in this set is treated as
+// fatal: retrying a misconfiguration, auth failure or quota wall on
+// a different machine type wastes calls without changing the outcome.
+//
+//   - VM_MIN_COUNT_NOT_REACHED: the bulkInsert wrapper error GCE
+//     emits when it could not place the requested VM (typical
+//     stockout symptom at count=1/minCount=1).
+//   - ZONE_RESOURCE_POOL_EXHAUSTED / ..._WITH_DETAILS: direct
+//     stockout codes; appear when the placement chose a zone that
+//     ran out of the requested machine type during scheduling.
+var stockoutErrorCodes = map[string]struct{}{
+	"VM_MIN_COUNT_NOT_REACHED":                  {},
+	"ZONE_RESOURCE_POOL_EXHAUSTED":              {},
+	"ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS": {},
+}
+
+// createInstanceViaBulkInsert provisions a single VM by looping over
+// the configured flex selections (or a synthetic single-entry list
+// derived from --google-machine-type when no --google-flex-selection
+// is configured), issuing one bulkInsert per selection. On the first
+// success it runs the standard post-create configuration; on a
+// stockout-class failure it advances to the next selection; on any
+// other failure it returns immediately. If every selection fails
+// with a stockout-class error, returns an aggregated error.
 func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
-	c.warnAboutMachineTypeInBulkInsertMode(d)
-
-	log.Infof("Creating instance via bulkInsert in %q", c.region())
-
-	props, err := c.buildBulkInsertInstanceProperties(d)
+	selections, err := c.effectiveFlexSelections(d)
 	if err != nil {
-		return fmt.Errorf("building instance properties for bulkInsert: %w", err)
+		return err
+	}
+
+	log.Infof("Creating instance via bulkInsert in %q across %d selection(s)", c.region(), len(selections))
+
+	stockoutErrs := make([]error, 0, len(selections))
+	for i, sel := range selections {
+		log.Infof("bulkInsert attempt %d/%d: machine-type=%q disk-type=%q", i+1, len(selections), sel.MachineType, sel.DiskType)
+		retryable, attemptErr := c.attemptBulkInsertForSelection(d, sel)
+		if attemptErr == nil {
+			return c.finishPostCreate(d)
+		}
+		if !retryable {
+			return attemptErr
+		}
+		log.Warnf("bulkInsert selection %d (%s) hit stockout-class failure, falling through: %v", i, sel.MachineType, attemptErr)
+		stockoutErrs = append(stockoutErrs, fmt.Errorf("selection %d (machine-type=%s): %w", i, sel.MachineType, attemptErr))
+	}
+
+	return fmt.Errorf("all %d bulkInsert selections failed with stockout-class errors: %w", len(selections), errors.Join(stockoutErrs...))
+}
+
+// effectiveFlexSelections returns the parsed selection list the loop
+// iterates over. When --google-flex-selection is configured it
+// parses each entry; when empty (and --google-bulk-insert is set) it
+// synthesises a single selection from --google-machine-type and the
+// per-driver disk defaults. This gives operators cross-zone fallback
+// via LocationPolicy even without configuring an explicit selection
+// ladder.
+func (c *ComputeUtil) effectiveFlexSelections(d *Driver) ([]flexSelection, error) {
+	if len(c.flexSelections) == 0 {
+		sel := flexSelection{
+			MachineType:    d.MachineType,
+			DiskType:       c.diskTypeURL,
+			DiskIops:       int64(d.ProvisionedIops),
+			DiskThroughput: int64(d.ProvisionedThroughput),
+		}
+		if sel.MachineType == "" {
+			return nil, errors.New("bulkInsert requires either --google-flex-selection or --google-machine-type")
+		}
+		return []flexSelection{sel}, nil
+	}
+
+	selections := make([]flexSelection, 0, len(c.flexSelections))
+	for _, entry := range c.flexSelections {
+		sel, err := parseFlexSelectionEntry(entry)
+		if err != nil {
+			return nil, fmt.Errorf("--google-flex-selection %q: %w", entry, err)
+		}
+		selections = append(selections, sel)
+	}
+	return selections, nil
+}
+
+// attemptBulkInsertForSelection issues a single bulkInsert call for
+// one selection. Returns:
+//   - (false, nil) on success;
+//   - (true, err)  on stockout-class failure (caller should advance
+//     to the next selection);
+//   - (false, err) on any other failure (caller should fail fast).
+func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection) (retryable bool, err error) {
+	props, err := c.buildBulkInsertInstanceProperties(d, sel)
+	if err != nil {
+		return false, fmt.Errorf("building instance properties for bulkInsert: %w", err)
 	}
 
 	req := &raw.BulkInsertInstanceResource{
@@ -56,14 +149,7 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			c.instanceName: {},
 		},
 		InstanceProperties: props,
-	}
-	req.LocationPolicy = c.buildLocationPolicy()
-	flex, err := c.buildInstanceFlexibilityPolicy(d)
-	if err != nil {
-		return err
-	}
-	if flex != nil {
-		req.InstanceFlexibilityPolicy = flex
+		LocationPolicy:     c.buildLocationPolicy(),
 	}
 
 	reqDumpBuf := new(bytes.Buffer)
@@ -77,31 +163,34 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 
 	op, err := c.service.RegionInstances.BulkInsert(c.project, c.region(), req).Do()
 	if err != nil {
-		return fmt.Errorf("bulkInsert rejected create for %q in %q: %w", c.instanceName, c.region(), err)
+		// Synchronous API rejections (auth, malformed request, etc.)
+		// are never stockout: fail fast.
+		return false, fmt.Errorf("bulkInsert rejected create for %q in %q: %w", c.instanceName, c.region(), err)
 	}
 
 	log.Infof("Waiting for bulkInsert operation %s", op.Name)
-	if err := c.waitForRegionOp(op.Name); err != nil {
-		return fmt.Errorf("bulkInsert for %q did not complete: %w", c.instanceName, err)
+	if waitErr := c.waitForRegionOp(op.Name); waitErr != nil {
+		wrapped := fmt.Errorf("bulkInsert for %q did not complete: %w", c.instanceName, waitErr)
+		if isStockoutError(waitErr) {
+			return true, wrapped
+		}
+		return false, wrapped
 	}
 
-	// BulkInsert's Operation TargetLink doesn't carry placement; look
-	// the instance up by name to find the zone for subsequent calls.
-	zone, err := c.discoverInstanceZone()
-	if err != nil {
-		return fmt.Errorf("discovering zone for bulkInsert-placed instance %q: %w", c.instanceName, err)
-	}
-	c.zone = zone
-	d.ResolvedZone = zone
-	c.zoneURL = apiURL + c.project + "/zones/" + zone
-
-	return c.finishPostCreate(d)
+	return false, nil
 }
 
-// buildBulkInsertInstanceProperties mirrors the direct-path Instances.Insert
-// body as an InstanceProperties (no Name / Zone — bulkInsert envelope
-// owns those).
-func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver) (*raw.InstanceProperties, error) {
+// buildBulkInsertInstanceProperties mirrors the direct-path
+// Instances.Insert body as an InstanceProperties for the given
+// selection. Machine type and disk spec come from the selection;
+// network, metadata, scheduling, service accounts, tags, labels and
+// accelerators come from the driver as in the direct path.
+//
+// Name and Zone are owned by the bulkInsert envelope (PerInstance
+// Properties keys and LocationPolicy respectively) and are not set
+// here. MachineType, DiskType and AcceleratorType are bare names —
+// zonal URLs would over-constrain or be rejected by bulkInsert.
+func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver, sel flexSelection) (*raw.InstanceProperties, error) {
 	var net string
 	if strings.Contains(d.Network, "/networks/") {
 		net = d.Network
@@ -114,10 +203,24 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver) (*raw.Instanc
 		return nil, err
 	}
 
-	// DeviceName is set so flex selections can override the boot disk
-	// by matching the same key (GCP merges by deviceName).
+	// Resolve effective disk parameters: per-selection override when
+	// the selection carries a disk-type, driver defaults otherwise.
+	diskType := sel.DiskType
+	if diskType == "" {
+		diskType = c.diskTypeURL
+	}
+	diskIops := sel.DiskIops
+	if diskIops == 0 {
+		diskIops = int64(d.ProvisionedIops)
+	}
+	diskThroughput := sel.DiskThroughput
+	if diskThroughput == 0 {
+		diskThroughput = int64(d.ProvisionedThroughput)
+	}
+
 	props := &raw.InstanceProperties{
 		Description:    "docker host vm",
+		MachineType:    sel.MachineType,
 		MinCpuPlatform: c.minCPUPlatform,
 		Disks: []*raw.AttachedDisk{
 			{
@@ -129,10 +232,8 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver) (*raw.Instanc
 				InitializeParams: &raw.AttachedDiskInitializeParams{
 					SourceImage: "https://www.googleapis.com/compute/v1/projects/" + d.MachineImage,
 					DiskSizeGb:  int64(d.DiskSize),
-					// Bare disk-type name (zonal URL would over-constrain
-					// or be rejected by bulkInsert).
-					DiskType: c.diskTypeURL,
-					Labels:   parseLabels(d),
+					DiskType:    diskType,
+					Labels:      parseLabels(d),
 				},
 			},
 		},
@@ -155,11 +256,11 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver) (*raw.Instanc
 		Metadata: metadata,
 	}
 
-	if d.ProvisionedIops > 0 {
-		props.Disks[0].InitializeParams.ProvisionedIops = int64(d.ProvisionedIops)
+	if diskIops > 0 {
+		props.Disks[0].InitializeParams.ProvisionedIops = diskIops
 	}
-	if d.ProvisionedThroughput > 0 {
-		props.Disks[0].InitializeParams.ProvisionedThroughput = int64(d.ProvisionedThroughput)
+	if diskThroughput > 0 {
+		props.Disks[0].InitializeParams.ProvisionedThroughput = diskThroughput
 	}
 
 	if c.maintenancePolicy != "" {
@@ -193,19 +294,25 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver) (*raw.Instanc
 // buildLocationPolicy always returns a policy with TargetShape=ANY so
 // GCP places the VM in whichever zone has capacity, even at count=1.
 //
-// This is load-bearing: the bulkInsert default is ANY_SINGLE_ZONE,
-// which commits to one zone up front and returns
-// VM_MIN_COUNT_NOT_REACHED on stockout there WITHOUT trying any other
-// zone — silently neutering a multi-zone LocationPolicy. ANY restores
-// the cross-zone fallback the policy is meant to provide (and also
-// maximises unused zonal reservation utilisation). See the 8-12%
-// creation-failure regression on saas-linux-small-amd64 where ~95% of
-// placements pinned to a single zone (us-east1-d).
+// This is load-bearing for ZONE fallback within a single selection:
+// the bulkInsert default is ANY_SINGLE_ZONE, which commits to one
+// zone up front and returns VM_MIN_COUNT_NOT_REACHED on stockout
+// there without trying any other zone, silently neutering a multi-
+// zone LocationPolicy. ANY restores the cross-zone behaviour the
+// policy is meant to provide (and also maximises unused zonal
+// reservation utilisation).
 //
-// When no zones are configured we still send the policy (with an empty
-// Locations map) purely to carry TargetShape=ANY; GCP then considers
-// every zone in the region. Without this, omitting LocationPolicy lets
-// GCP fall back to the ANY_SINGLE_ZONE default region-wide.
+// Note: this only rescues us across ZONES for the currently-attempted
+// machine type / disk spec. Cross-SELECTION fallback (e.g. n4d
+// stocked out → try n2d) is handled driver-side by the
+// createInstanceViaBulkInsert loop, because InstanceFlexibilityPolicy
+// does not provide selection fallback at count=1.
+//
+// When no zones are configured we still send the policy (with an
+// empty Locations map) purely to carry TargetShape=ANY; GCP then
+// considers every zone in the region. Without this, omitting
+// LocationPolicy lets GCP fall back to the ANY_SINGLE_ZONE default
+// region-wide.
 func (c *ComputeUtil) buildLocationPolicy() *raw.LocationPolicy {
 	policy := &raw.LocationPolicy{
 		TargetShape: "ANY",
@@ -306,61 +413,28 @@ func parseFlexSelectionEntry(entry string) (flexSelection, error) {
 	return sel, nil
 }
 
-// buildInstanceFlexibilityPolicy returns nil when no flex selections
-// are configured. Each --google-flex-selection becomes one
-// InstanceSelection with rank = occurrence order. Selection keys are
-// "rank-N" so GCP error messages refer back to the operator's input
-// order. Entries with a "disk-type" key attach a disk override.
-func (c *ComputeUtil) buildInstanceFlexibilityPolicy(d *Driver) (*raw.InstanceFlexibilityPolicy, error) {
-	if len(c.flexSelections) == 0 {
-		return nil, nil
+// isStockoutError reports whether err carries a GCE operation error
+// whose code is in stockoutErrorCodes. Walks the error chain via
+// errors.As so wrappers added by attemptBulkInsertForSelection /
+// waitForOp don't hide the underlying operation error.
+//
+// Conservative: an err that doesn't unwrap to a recognised operation
+// error type, or that carries a code we don't list as stockout-class,
+// is treated as not retryable. Better to bail than to retry uselessly
+// on a config or quota failure.
+func isStockoutError(err error) bool {
+	if err == nil {
+		return false
 	}
-
-	selections := make(map[string]raw.InstanceFlexibilityPolicyInstanceSelection, len(c.flexSelections))
-	for i, entry := range c.flexSelections {
-		sel, err := parseFlexSelectionEntry(entry)
-		if err != nil {
-			return nil, fmt.Errorf("--google-flex-selection %q: %w", entry, err)
-		}
-		key := fmt.Sprintf("rank-%d", i)
-		instSel := raw.InstanceFlexibilityPolicyInstanceSelection{
-			MachineTypes: []string{sel.MachineType},
-			Rank:         int64(i),
-		}
-		if sel.DiskType != "" {
-			instSel.Disks = []*raw.AttachedDisk{buildSelectionDiskOverride(d, sel)}
-		}
-		selections[key] = instSel
+	var opErr *operationError
+	if !errors.As(err, &opErr) {
+		return false
 	}
-	return &raw.InstanceFlexibilityPolicy{
-		InstanceSelections: selections,
-	}, nil
-}
-
-// buildSelectionDiskOverride mirrors the template's boot disk (image,
-// size, labels) with disk-type, IOPS, and throughput from the parsed
-// selection. Merged with the template by DeviceName.
-func buildSelectionDiskOverride(d *Driver, sel flexSelection) *raw.AttachedDisk {
-	disk := &raw.AttachedDisk{
-		Boot:       true,
-		AutoDelete: true,
-		DeviceName: bootDeviceName,
-		Type:       "PERSISTENT",
-		Mode:       "READ_WRITE",
-		InitializeParams: &raw.AttachedDiskInitializeParams{
-			SourceImage: "https://www.googleapis.com/compute/v1/projects/" + d.MachineImage,
-			DiskSizeGb:  int64(d.DiskSize),
-			DiskType:    sel.DiskType,
-			Labels:      parseLabels(d),
-		},
+	if opErr == nil || opErr.Code == "" {
+		return false
 	}
-	if sel.DiskIops > 0 {
-		disk.InitializeParams.ProvisionedIops = sel.DiskIops
-	}
-	if sel.DiskThroughput > 0 {
-		disk.InitializeParams.ProvisionedThroughput = sel.DiskThroughput
-	}
-	return disk
+	_, ok := stockoutErrorCodes[opErr.Code]
+	return ok
 }
 
 // discoverInstanceZone finds the zone GCP placed our just-created
@@ -397,10 +471,19 @@ func (c *ComputeUtil) discoverInstanceZone() (string, error) {
 	return "", fmt.Errorf("instance %q not found in any zone after bulkInsert (operation completed but aggregatedList did not return it)", c.instanceName)
 }
 
-// finishPostCreate runs the post-bulkInsert work: fetch the instance,
-// record the flex-picked machine type, add the firewall tag, push the
-// SSH key. Zone is already set by discoverInstanceZone upstream.
+// finishPostCreate runs the post-bulkInsert work: discover the zone
+// GCP placed the VM in, set the driver / compute-util zone fields,
+// fetch the instance, record the flex-picked machine type, add the
+// firewall tag, push the SSH key.
 func (c *ComputeUtil) finishPostCreate(d *Driver) error {
+	zone, err := c.discoverInstanceZone()
+	if err != nil {
+		return fmt.Errorf("discovering zone for bulkInsert-placed instance %q: %w", c.instanceName, err)
+	}
+	c.zone = zone
+	d.ResolvedZone = zone
+	c.zoneURL = apiURL + c.project + "/zones/" + zone
+
 	instance, err := c.instance()
 	if err != nil {
 		return fmt.Errorf("looking up just-created instance %q: %w", c.instanceName, err)
@@ -456,13 +539,4 @@ func machineTypeFromInstanceURL(rawURL string) (string, error) {
 		return "", fmt.Errorf("machine-type URL %q has no /machineTypes/<type> segment", rawURL)
 	}
 	return m[1], nil
-}
-
-// warnAboutMachineTypeInBulkInsertMode flags --google-machine-type as
-// shadowed in bulkInsert mode (machine-type comes from each
-// --google-flex-selection entry).
-func (c *ComputeUtil) warnAboutMachineTypeInBulkInsertMode(d *Driver) {
-	if d.MachineType != "" && d.MachineType != defaultMachineType {
-		log.Warnf("--google-machine-type=%q is ignored in bulkInsert mode; only --google-flex-selection is honoured.", d.MachineType)
-	}
 }

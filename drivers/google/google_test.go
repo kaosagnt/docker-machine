@@ -87,20 +87,22 @@ func TestSetConfigFromFlags_ProvisionedIopsAndThroughput(t *testing.T) {
 	}
 }
 
-func TestSetConfigFromFlags_BulkInsertRequiresFlexSelection(t *testing.T) {
+func TestSetConfigFromFlags_BulkInsertFlexSelection(t *testing.T) {
 	tests := map[string]struct {
 		flagsValues  map[string]interface{}
 		expectErr    bool
 		errSubstring string
 	}{
-		"bulkInsert without flex selection is rejected": {
+		"bulkInsert without flex selection falls back to --google-machine-type": {
+			// Operators can opt into bulkInsert without a selection
+			// ladder: createInstanceViaBulkInsert synthesises a single
+			// selection from --google-machine-type. Validation should
+			// accept this configuration.
 			flagsValues: map[string]interface{}{
 				"google-project":     "PROJECT",
 				"google-bulk-insert": true,
 				"google-region":      "us-east1",
 			},
-			expectErr:    true,
-			errSubstring: "requires at least one --google-flex-selection",
 		},
 		"bulkInsert with valid flex selection succeeds": {
 			flagsValues: map[string]interface{}{

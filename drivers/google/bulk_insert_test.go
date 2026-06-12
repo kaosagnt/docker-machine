@@ -1,10 +1,13 @@
 package google
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	raw "google.golang.org/api/compute/v1"
 )
 
 func TestParseLocationZoneEntry(t *testing.T) {
@@ -62,41 +65,6 @@ func TestBuildLocationPolicy_Zones(t *testing.T) {
 	assert.Equal(t, "DENY", p.Locations["zones/us-east1-d"].Preference)
 }
 
-func TestBuildInstanceFlexibilityPolicy_Nil(t *testing.T) {
-	c := &ComputeUtil{}
-	p, err := c.buildInstanceFlexibilityPolicy(&Driver{})
-	require.NoError(t, err)
-	assert.Nil(t, p)
-}
-
-func TestBuildInstanceFlexibilityPolicy_Ranked(t *testing.T) {
-	c := &ComputeUtil{
-		flexSelections: []string{
-			"machine-type=n2-standard-2",
-			"machine-type=n2d-standard-2",
-			"machine-type=c2-standard-4",
-		},
-	}
-	p, err := c.buildInstanceFlexibilityPolicy(&Driver{})
-	require.NoError(t, err)
-	require.NotNil(t, p)
-	require.Len(t, p.InstanceSelections, 3)
-	require.Contains(t, p.InstanceSelections, "rank-0")
-	require.Contains(t, p.InstanceSelections, "rank-1")
-	require.Contains(t, p.InstanceSelections, "rank-2")
-	r0 := p.InstanceSelections["rank-0"]
-	r1 := p.InstanceSelections["rank-1"]
-	r2 := p.InstanceSelections["rank-2"]
-
-	assert.Equal(t, int64(0), r0.Rank)
-	assert.Equal(t, []string{"n2-standard-2"}, r0.MachineTypes)
-	assert.Nil(t, r0.Disks)
-	assert.Equal(t, int64(1), r1.Rank)
-	assert.Equal(t, []string{"n2d-standard-2"}, r1.MachineTypes)
-	assert.Equal(t, int64(2), r2.Rank)
-	assert.Equal(t, []string{"c2-standard-4"}, r2.MachineTypes)
-}
-
 func TestParseFlexSelectionEntry(t *testing.T) {
 	cases := map[string]struct {
 		entry        string
@@ -149,46 +117,6 @@ func TestParseFlexSelectionEntry(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
-}
-
-func TestBuildInstanceFlexibilityPolicy_PerSelectionDiskOverride(t *testing.T) {
-	c := &ComputeUtil{
-		flexSelections: []string{
-			"machine-type=t2d-standard-2",
-			"machine-type=n2d-standard-2",
-			"machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140",
-		},
-	}
-	d := &Driver{
-		MachineImage: "cos-cloud/global/images/family/cos-stable",
-		DiskSize:     10,
-		Labels:       []string{"team:runners", "env:ci"},
-	}
-	p, err := c.buildInstanceFlexibilityPolicy(d)
-	require.NoError(t, err)
-	require.NotNil(t, p)
-	require.Len(t, p.InstanceSelections, 3)
-	require.Contains(t, p.InstanceSelections, "rank-0")
-	require.Contains(t, p.InstanceSelections, "rank-1")
-	require.Contains(t, p.InstanceSelections, "rank-2")
-	r0 := p.InstanceSelections["rank-0"]
-	assert.Equal(t, []string{"t2d-standard-2"}, r0.MachineTypes)
-	assert.Nil(t, r0.Disks, "bare entry must not carry a disk override")
-
-	r1 := p.InstanceSelections["rank-1"]
-	assert.Nil(t, r1.Disks)
-
-	r2 := p.InstanceSelections["rank-2"]
-	assert.Equal(t, []string{"n4-standard-2"}, r2.MachineTypes)
-	require.Len(t, r2.Disks, 1)
-	assert.True(t, r2.Disks[0].Boot)
-	assert.True(t, r2.Disks[0].AutoDelete)
-	assert.Equal(t, bootDeviceName, r2.Disks[0].DeviceName)
-	assert.Equal(t, "hyperdisk-balanced", r2.Disks[0].InitializeParams.DiskType)
-	assert.Equal(t, int64(10), r2.Disks[0].InitializeParams.DiskSizeGb)
-	assert.Equal(t, int64(3000), r2.Disks[0].InitializeParams.ProvisionedIops)
-	assert.Equal(t, int64(140), r2.Disks[0].InitializeParams.ProvisionedThroughput)
-	assert.Equal(t, map[string]string{"team": "runners", "env": "ci"}, r2.Disks[0].InitializeParams.Labels)
 }
 
 func TestZoneFromInstanceURL(t *testing.T) {
@@ -273,19 +201,23 @@ func TestMachineTypeFromInstanceURL(t *testing.T) {
 	}
 }
 
-func TestBuildBulkInsertInstanceProperties_BareNamesNoZone(t *testing.T) {
-	// Critical bulkInsert invariant: InstanceProperties must not pin to
-	// a specific zone (MachineType / DiskType / AcceleratorType must be
-	// bare names, not zonal URLs), so GCP can resolve them against the
-	// placement zone chosen by the LocationPolicy.
+func TestBuildBulkInsertInstanceProperties_BareNamesAndSelectionFields(t *testing.T) {
+	// Critical bulkInsert invariant: InstanceProperties must not pin
+	// to a specific zone (MachineType / DiskType / AcceleratorType
+	// are bare names, not zonal URLs), so GCP can resolve them
+	// against the placement zone chosen by the LocationPolicy.
+	//
+	// Per-selection fields override the driver-default disk spec.
 	d := &Driver{
-		MachineType:    "n2-standard-2",
-		MachineImage:   "ubuntu-os-cloud/global/images/ubuntu-2204",
-		DiskSize:       20,
-		DiskType:       "pd-balanced",
-		Network:        "default",
-		ServiceAccount: defaultServiceAccount,
-		Scopes:         defaultScopes,
+		MachineType:           "ignored-in-flex-mode",
+		MachineImage:          "ubuntu-os-cloud/global/images/ubuntu-2204",
+		DiskSize:              20,
+		DiskType:              "pd-balanced",
+		Network:               "default",
+		ServiceAccount:        defaultServiceAccount,
+		Scopes:                defaultScopes,
+		ProvisionedIops:       0,
+		ProvisionedThroughput: 0,
 	}
 	c := &ComputeUtil{
 		project:        "p",
@@ -295,21 +227,30 @@ func TestBuildBulkInsertInstanceProperties_BareNamesNoZone(t *testing.T) {
 		accelerator:    "count=1,type=nvidia-tesla-t4",
 	}
 
-	props, err := c.buildBulkInsertInstanceProperties(d)
+	sel := flexSelection{
+		MachineType:    "n4-standard-2",
+		DiskType:       "hyperdisk-balanced",
+		DiskIops:       3000,
+		DiskThroughput: 140,
+	}
+	props, err := c.buildBulkInsertInstanceProperties(d, sel)
 	require.NoError(t, err)
 	require.NotNil(t, props)
 
-	// MachineType: unset in flex mode (flex selections provide it).
-	assert.Empty(t, props.MachineType)
+	// MachineType: bare name from the selection.
+	assert.Equal(t, "n4-standard-2", props.MachineType)
+	assert.NotContains(t, props.MachineType, "/zones/")
 
-	// DiskType: bare name on InitializeParams.
+	// DiskType + IOPS + Throughput: from the selection.
 	require.Len(t, props.Disks, 1)
 	require.NotNil(t, props.Disks[0].InitializeParams)
-	assert.Equal(t, "pd-balanced", props.Disks[0].InitializeParams.DiskType)
+	assert.Equal(t, "hyperdisk-balanced", props.Disks[0].InitializeParams.DiskType)
 	assert.NotContains(t, props.Disks[0].InitializeParams.DiskType, "/zones/")
+	assert.Equal(t, int64(3000), props.Disks[0].InitializeParams.ProvisionedIops)
+	assert.Equal(t, int64(140), props.Disks[0].InitializeParams.ProvisionedThroughput)
 
-	// AcceleratorType: bare name (the direct path uses a zonal URL here;
-	// bulkInsert must not, or GCP rejects the InstanceProperties).
+	// AcceleratorType: bare name (the direct path uses a zonal URL
+	// here; bulkInsert must not, or GCP rejects the InstanceProperties).
 	require.Len(t, props.GuestAccelerators, 1)
 	assert.Equal(t, int64(1), props.GuestAccelerators[0].AcceleratorCount)
 	assert.Equal(t, "nvidia-tesla-t4", props.GuestAccelerators[0].AcceleratorType)
@@ -320,6 +261,150 @@ func TestBuildBulkInsertInstanceProperties_BareNamesNoZone(t *testing.T) {
 	require.Len(t, props.NetworkInterfaces, 1)
 	assert.Contains(t, props.NetworkInterfaces[0].Network, "/global/networks/default")
 	assert.Empty(t, props.NetworkInterfaces[0].Subnetwork)
+}
+
+func TestBuildBulkInsertInstanceProperties_SelectionWithoutDiskOverride(t *testing.T) {
+	// A selection without disk-type / disk-iops / disk-throughput
+	// inherits the driver-default boot disk: same shape the direct
+	// path uses (pd-balanced from --google-disk-type, zero IOPS /
+	// throughput unless --google-provisioned-* were set).
+	d := &Driver{
+		MachineType:           "ignored",
+		MachineImage:          "ubuntu-os-cloud/global/images/ubuntu-2204",
+		DiskSize:              25,
+		DiskType:              "pd-balanced",
+		Network:               "default",
+		ServiceAccount:        defaultServiceAccount,
+		Scopes:                defaultScopes,
+		ProvisionedIops:       2500,
+		ProvisionedThroughput: 100,
+	}
+	c := &ComputeUtil{
+		project:        "p",
+		networkProject: "p",
+		diskTypeURL:    "pd-balanced",
+		globalURL:      apiURL + "p/global",
+	}
+
+	sel := flexSelection{MachineType: "n2d-standard-2"}
+	props, err := c.buildBulkInsertInstanceProperties(d, sel)
+	require.NoError(t, err)
+	require.NotNil(t, props)
+
+	assert.Equal(t, "n2d-standard-2", props.MachineType)
+	require.Len(t, props.Disks, 1)
+	require.NotNil(t, props.Disks[0].InitializeParams)
+	assert.Equal(t, "pd-balanced", props.Disks[0].InitializeParams.DiskType)
+	// Driver-provided IOPS / Throughput fall through when the
+	// selection does not override them.
+	assert.Equal(t, int64(2500), props.Disks[0].InitializeParams.ProvisionedIops)
+	assert.Equal(t, int64(100), props.Disks[0].InitializeParams.ProvisionedThroughput)
+}
+
+func TestIsStockoutError(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want bool
+	}{
+		"nil":                                   {err: nil, want: false},
+		"plain error not retryable":             {err: errors.New("network blew up"), want: false},
+		"untyped operation error not retryable": {err: errors.New("operation error: {SOME_CODE [] x y [] []}"), want: false},
+		"VM_MIN_COUNT_NOT_REACHED is retryable": {
+			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "VM_MIN_COUNT_NOT_REACHED"}},
+			want: true,
+		},
+		"ZONE_RESOURCE_POOL_EXHAUSTED is retryable": {
+			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "ZONE_RESOURCE_POOL_EXHAUSTED"}},
+			want: true,
+		},
+		"ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS is retryable": {
+			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS"}},
+			want: true,
+		},
+		"wrapped op error still classified": {
+			err: fmt.Errorf("bulkInsert for %q did not complete: %w", "tm",
+				&operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "VM_MIN_COUNT_NOT_REACHED"}},
+			),
+			want: true,
+		},
+		"unknown code not retryable": {
+			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "INVALID_FIELD_VALUE"}},
+			want: false,
+		},
+		"empty code not retryable": {
+			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: ""}},
+			want: false,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isStockoutError(tc.err))
+		})
+	}
+}
+
+func TestEffectiveFlexSelections_SynthesisedFromMachineType(t *testing.T) {
+	// With --google-bulk-insert but no --google-flex-selection, the
+	// loop iterates a single selection synthesised from
+	// --google-machine-type / --google-disk-type / --google-provisioned-*.
+	d := &Driver{
+		MachineType:           "n2d-standard-2",
+		ProvisionedIops:       1500,
+		ProvisionedThroughput: 90,
+	}
+	c := &ComputeUtil{
+		diskTypeURL: "pd-balanced",
+	}
+
+	sels, err := c.effectiveFlexSelections(d)
+	require.NoError(t, err)
+	require.Len(t, sels, 1)
+	assert.Equal(t, "n2d-standard-2", sels[0].MachineType)
+	assert.Equal(t, "pd-balanced", sels[0].DiskType)
+	assert.Equal(t, int64(1500), sels[0].DiskIops)
+	assert.Equal(t, int64(90), sels[0].DiskThroughput)
+}
+
+func TestEffectiveFlexSelections_EmptyMachineTypeIsAnError(t *testing.T) {
+	// Defensive: --google-bulk-insert without --google-flex-selection
+	// or --google-machine-type has nothing to attempt.
+	d := &Driver{}
+	c := &ComputeUtil{}
+
+	_, err := c.effectiveFlexSelections(d)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires either --google-flex-selection or --google-machine-type")
+}
+
+func TestEffectiveFlexSelections_ParsedFromFlexSelections(t *testing.T) {
+	c := &ComputeUtil{
+		flexSelections: []string{
+			"machine-type=n2-standard-2",
+			"machine-type=t2d-standard-2",
+			"machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140",
+		},
+	}
+
+	sels, err := c.effectiveFlexSelections(&Driver{})
+	require.NoError(t, err)
+	require.Len(t, sels, 3)
+	assert.Equal(t, "n2-standard-2", sels[0].MachineType)
+	assert.Empty(t, sels[0].DiskType)
+	assert.Equal(t, "t2d-standard-2", sels[1].MachineType)
+	assert.Equal(t, "n4-standard-2", sels[2].MachineType)
+	assert.Equal(t, "hyperdisk-balanced", sels[2].DiskType)
+	assert.Equal(t, int64(3000), sels[2].DiskIops)
+	assert.Equal(t, int64(140), sels[2].DiskThroughput)
+}
+
+func TestEffectiveFlexSelections_ParseErrorSurfaced(t *testing.T) {
+	c := &ComputeUtil{
+		flexSelections: []string{"machine-type=n2-standard-2", "bogus-without-equals"},
+	}
+	_, err := c.effectiveFlexSelections(&Driver{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--google-flex-selection")
 }
 
 func TestUsesBulkInsert(t *testing.T) {
