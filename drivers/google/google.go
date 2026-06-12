@@ -82,8 +82,10 @@ type Driver struct {
 	FlexSelections []string
 
 	// LocationZones constrains zone selection. Each entry is
-	// "zone[:PREFERENCE]" (ALLOW / PREFERRED / DENY); empty means GCP
-	// picks any zone in Region.
+	// "zone[:PREFERENCE]" (ALLOW / DENY); empty means GCP picks any
+	// zone in Region. Note: bulkInsert's locationPolicy.locations[]
+	// preference only accepts ALLOW or DENY — PREFERRED is a MIG
+	// distributionPolicy concept and is not valid here.
 	LocationZones []string
 
 	// ResolvedZone and ResolvedMachineType carry the values GCP actually
@@ -297,7 +299,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.BoolFlag{
 			Name:   "google-bulk-insert",
-			Usage:  "(Experimental) Provision via RegionInstances.BulkInsert with LocationPolicy / InstanceFlexibilityPolicy rather than zonal Instances.Insert. Requires --google-region; mutually exclusive with --google-zone.",
+			Usage:  "(Experimental) Provision via RegionInstances.BulkInsert with a multi-zone LocationPolicy rather than zonal Instances.Insert. The driver issues one BulkInsert per --google-flex-selection entry in preference order, advancing to the next selection on stockout-class failures (VM_MIN_COUNT_NOT_REACHED, ZONE_RESOURCE_POOL_EXHAUSTED). With no --google-flex-selection a single selection is synthesised from --google-machine-type / --google-disk-type. Requires --google-region; mutually exclusive with --google-zone.",
 			EnvVar: "GOOGLE_BULK_INSERT",
 		},
 		mcnflag.StringFlag{
@@ -307,12 +309,12 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-flex-selection",
-			Usage:  "(Experimental) Selection for bulkInsert flex policy. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput attach a disk override. Repeat in preference order: first occurrence is rank 0 (most preferred). Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Requires --google-region.",
+			Usage:  "(Experimental) Candidate machine-type / disk spec for bulkInsert. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput override the boot disk for this entry. Repeat in preference order: first occurrence is tried first, subsequent entries are tried only if the previous one fails with a stockout-class error. Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Optional in bulkInsert mode: when omitted, a single selection is synthesised from --google-machine-type and --google-disk-type.",
 			EnvVar: "GOOGLE_FLEX_SELECTION",
 		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-location-zone",
-			Usage:  "(Experimental) Zone constraint for bulkInsert. Format: zone[:PREFERENCE] where preference is ALLOW (default), PREFERRED, or DENY. Repeat per zone. Empty = any zone in --google-region.",
+			Usage:  "(Experimental) Zone constraint for bulkInsert. Format: zone[:PREFERENCE] where preference is ALLOW (default) or DENY. Repeat per zone. Empty = any zone in --google-region. Note: GCE bulkInsert only accepts ALLOW or DENY here (PREFERRED is not valid and is coerced to ALLOW with a warning).",
 			EnvVar: "GOOGLE_LOCATION_ZONE",
 		},
 	}
@@ -416,9 +418,6 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		if d.Region == "" {
 			return errors.New("--google-bulk-insert requires --google-region")
 		}
-		if len(d.FlexSelections) == 0 {
-			return errors.New("--google-bulk-insert requires at least one --google-flex-selection")
-		}
 		if d.Zone != "" && d.Zone != defaultZone {
 			return errors.New("--google-bulk-insert and --google-zone are mutually exclusive: bulkInsert picks the zone from --google-location-zone")
 		}
@@ -434,7 +433,15 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 			}
 		}
 		for _, entry := range d.LocationZones {
-			zone, _ := parseLocationZoneEntry(entry)
+			// Split off the zone directly rather than via
+			// parseLocationZoneEntry: the latter warns on invalid
+			// preferences, and calling it here too would emit that
+			// warning twice (once at config validation, once at create).
+			// The create-time call in buildLocationPolicy owns the warning.
+			zone := entry
+			if i := strings.IndexByte(entry, ':'); i >= 0 {
+				zone = entry[:i]
+			}
 			if strings.TrimSpace(zone) == "" {
 				return fmt.Errorf("--google-location-zone entry %q has an empty zone (expected zone[:PREFERENCE])", entry)
 			}

@@ -698,6 +698,23 @@ func (c *ComputeUtil) startInstance() error {
 	return c.waitForRegionalOp(op.Name)
 }
 
+// operationError carries a structured GCE Operation.Error.Errors[0]
+// alongside the existing "operation error: {...}" rendering. The
+// %v rendering is preserved character-for-character so callers that
+// matched on the string keep working; new code can errors.As into
+// *operationError to read the Code field (used by isStockoutError
+// for cross-selection retry classification in bulkInsert mode).
+type operationError struct {
+	*raw.OperationErrorErrors
+}
+
+func (e *operationError) Error() string {
+	if e.OperationErrorErrors == nil {
+		return "operation error"
+	}
+	return fmt.Sprintf("operation error: %v", *e.OperationErrorErrors)
+}
+
 // waitForOp waits for the operation to finish.
 func (c *ComputeUtil) waitForOp(opGetter func() (*raw.Operation, error)) error {
 	var next time.Duration
@@ -718,7 +735,7 @@ func (c *ComputeUtil) waitForOp(opGetter func() (*raw.Operation, error)) error {
 		log.Debugf("Operation %q status: %s", op.Name, op.Status)
 		if op.Status == "DONE" {
 			if op.Error != nil {
-				return fmt.Errorf("operation error: %v", *op.Error.Errors[0])
+				return &operationError{OperationErrorErrors: op.Error.Errors[0]}
 			}
 			break
 		}
