@@ -141,18 +141,30 @@ func (c *fakeSeqClient) Start(command string) (io.ReadCloser, io.ReadCloser, err
 }
 func (c *fakeSeqClient) Wait() error { return nil }
 
-// installFakeSSHClient swaps the package factory to hand back the given client,
-// and zeroes the retry sleep so the test runs fast. Restores both on cleanup.
-func installFakeSSHClient(t *testing.T, client ssh.Client) {
+// installFakeSSHFactory swaps the package factory and zeroes the retry sleep so
+// the test runs fast. Restores both on cleanup.
+//
+// NOTE: this mutates package-level state (sshClientFactory/sshRetryInterval).
+// Tests that call it (or installFakeSSHClient) MUST NOT use t.Parallel() — the
+// shared globals would race. Top-level tests in this package run sequentially,
+// which is what keeps this safe.
+func installFakeSSHFactory(t *testing.T, factory func(Driver) (ssh.Client, error)) {
 	t.Helper()
 	origFactory := sshClientFactory
 	origInterval := sshRetryInterval
-	sshClientFactory = func(Driver) (ssh.Client, error) { return client, nil }
+	sshClientFactory = factory
 	sshRetryInterval = 0
 	t.Cleanup(func() {
 		sshClientFactory = origFactory
 		sshRetryInterval = origInterval
 	})
+}
+
+// installFakeSSHClient swaps the package factory to hand back the given client.
+// See installFakeSSHFactory for the no-t.Parallel() constraint.
+func installFakeSSHClient(t *testing.T, client ssh.Client) {
+	t.Helper()
+	installFakeSSHFactory(t, func(Driver) (ssh.Client, error) { return client, nil })
 }
 
 func TestRunSSHCommandFromDriverWithRetry(t *testing.T) {
@@ -234,5 +246,63 @@ func TestRunSSHCommandFromDriverIsSingleShot(t *testing.T) {
 	}
 	if fake.calls != 1 {
 		t.Errorf("single-shot must run exactly once (reboot safety), got %d calls", fake.calls)
+	}
+}
+
+// TestRunSSHCommandFromDriverWithRetryBuildsFreshClientPerAttempt pins the
+// "build a fresh client (and therefore a fresh ssh process and connection) on
+// every attempt" behavior. Each attempt gets a brand-new fakeSeqClient whose
+// queue holds exactly ONE transport failure. If the loop ever reused a single
+// client across attempts (a regression that hoists sshClientFactory out of the
+// loop), the second Output call would hit the "unexpected extra Output call"
+// guard and fail this test.
+func TestRunSSHCommandFromDriverWithRetryBuildsFreshClientPerAttempt(t *testing.T) {
+	transport := exitErrorWithCode(t, sshTransportExitStatus)
+
+	var factoryCalls int
+	clients := []*fakeSeqClient{}
+	installFakeSSHFactory(t, func(Driver) (ssh.Client, error) {
+		factoryCalls++
+		c := &fakeSeqClient{queue: []cmdResult{{"", transport}}}
+		clients = append(clients, c)
+		return c, nil
+	})
+
+	_, err := RunSSHCommandFromDriverWithRetry(nil, "apt-get install -y curl")
+	if err == nil {
+		t.Fatal("expected error after exhausting attempts")
+	}
+	if factoryCalls != sshCommandMaxAttempts {
+		t.Errorf("expected a fresh client per attempt (%d factory calls), got %d", sshCommandMaxAttempts, factoryCalls)
+	}
+	for i, c := range clients {
+		if c.calls != 1 {
+			t.Errorf("client %d should have received exactly 1 Output call, got %d", i, c.calls)
+		}
+	}
+}
+
+// TestRunSSHCommandFromDriverWithRetryFactoryErrorFailsFast pins that a client
+// CONSTRUCTION failure (deterministic local/driver state, not a transient
+// transport drop) is returned immediately, without retry and without being
+// wrapped in the "ssh command error" envelope.
+func TestRunSSHCommandFromDriverWithRetryFactoryErrorFailsFast(t *testing.T) {
+	buildErr := errors.New("get ssh port: boom")
+
+	var factoryCalls int
+	installFakeSSHFactory(t, func(Driver) (ssh.Client, error) {
+		factoryCalls++
+		return nil, buildErr
+	})
+
+	_, err := RunSSHCommandFromDriverWithRetry(nil, "apt-get install -y curl")
+	if !errors.Is(err, buildErr) {
+		t.Fatalf("expected the raw construction error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "ssh command error") {
+		t.Errorf("construction error must not be wrapped in the command-error envelope, got %v", err)
+	}
+	if factoryCalls != 1 {
+		t.Errorf("construction failure must fail fast (1 factory call, no retry), got %d", factoryCalls)
 	}
 }

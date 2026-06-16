@@ -170,10 +170,14 @@ func runSSHCommandFromDriver(d Driver, command string, maxAttempts int) (string,
 		var client ssh.Client
 		client, err = sshClientFactory(d)
 		if err != nil {
-			// Client construction reads only local/driver state (hostname,
-			// port, key path); a failure here is deterministic, not a
-			// transient transport drop, so fail fast rather than retry — this
-			// also matches the pre-existing behavior.
+			// Client construction does NO network I/O — it reads only
+			// local/driver state (hostname, port, key file). The TCP dial,
+			// DNS resolution and SSH handshake all happen later inside
+			// client.Output(), where a transient failure surfaces as an
+			// exit-255 / ExitMissingError that isSSHTransportError DOES retry.
+			// So a failure here is a deterministic local error (bad port,
+			// unreadable key), not a transient transport drop: fail fast
+			// rather than retry. This also matches the pre-existing behavior.
 			return "", err
 		}
 
