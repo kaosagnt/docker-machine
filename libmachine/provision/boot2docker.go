@@ -262,7 +262,9 @@ func (provisioner *Boot2DockerProvisioner) Provision(swarmOptions swarm.Options,
 }
 
 func (provisioner *Boot2DockerProvisioner) SSHCommand(args string) (string, error) {
-	return drivers.RunSSHCommandFromDriver(provisioner.Driver, args)
+	// Provisioning commands are idempotent, so retry on transient transport
+	// (mid-session SSH) drops, which are amplified on high-latency links.
+	return drivers.RunSSHCommandFromDriverWithRetry(provisioner.Driver, args)
 }
 
 func (provisioner *Boot2DockerProvisioner) GetDriver() drivers.Driver {

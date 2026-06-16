@@ -111,7 +111,13 @@ func (detector StandardDetector) DetectProvisioner(d drivers.Driver) (Provisione
 
 	log.Info("Detecting the provisioner...")
 
-	osReleaseOut, err := drivers.RunSSHCommandFromDriver(d, "cat /etc/os-release")
+	// Reading /etc/os-release is an idempotent, read-only command run very early
+	// in the create — exactly when a transient mid-session SSH drop is most
+	// likely on a high-latency / cross-region link. Retry on transport failure
+	// so a momentary drop here does not abort the whole create before
+	// provisioning even begins. (DetectProvisioner runs once, not in a WaitFor
+	// loop, so there is no nested retry.)
+	osReleaseOut, err := drivers.RunSSHCommandFromDriverWithRetry(d, "cat /etc/os-release")
 	if err != nil {
 		return nil, fmt.Errorf("Error getting SSH command: %s", err)
 	}

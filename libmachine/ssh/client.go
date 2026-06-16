@@ -74,7 +74,9 @@ var (
 		"-o", "ControlPath=none",
 		"-o", "LogLevel=quiet", // suppress "Warning: Permanently added '[localhost]:2022' (ECDSA) to the list of known hosts."
 		"-o", "PasswordAuthentication=no",
-		"-o", "ServerAliveInterval=60", // prevents connection to be dropped if command takes too long
+		"-o", "ServerAliveInterval=15", // probe the peer every 15s of inactivity
+		"-o", "ServerAliveCountMax=3", // give up only after ~45s of missed probes (was implicit default 3 with a 60s interval = 180s, far too slow to matter during provisioning)
+		"-o", "TCPKeepAlive=yes", // surface dead TCP connections at the OS layer too
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 	}

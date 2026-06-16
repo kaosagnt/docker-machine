@@ -169,8 +169,12 @@ func (provisioner *RancherProvisioner) upgrade() error {
 		}
 
 		log.Infof("Upgrade succeeded, rebooting")
-		// ignore errors here because the SSH connection will close
-		provisioner.SSHCommand("sudo reboot")
+		// ignore errors here because the SSH connection will close.
+		// Use the single-shot driver call rather than the provisioner's
+		// SSHCommand, which retries on transport errors: `sudo reboot`
+		// severs the session on success (ssh exits 255), and retrying it
+		// would re-issue the reboot against a host that is going down.
+		drivers.RunSSHCommandFromDriver(provisioner.GetDriver(), "sudo reboot")
 
 		return nil
 	}
