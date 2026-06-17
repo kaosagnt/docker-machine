@@ -33,80 +33,70 @@ func exitErrorWithCode(t *testing.T, code int) *exec.ExitError {
 }
 
 func TestIsSSHTransportError(t *testing.T) {
-	tests := []struct {
-		name string
+	t.Parallel()
+
+	tests := map[string]struct {
 		err  error
 		want bool
 	}{
-		{
-			name: "nil is not a transport error",
+		"nil is not a transport error": {
 			err:  nil,
 			want: false,
 		},
-		{
-			name: "external ssh transport failure (exit 255) is retryable",
+		"external ssh transport failure (exit 255) is retryable": {
 			err:  exitErrorWithCode(t, sshTransportExitStatus),
 			want: true,
 		},
-		{
-			name: "external remote command failure (exit 1) is not retryable",
+		"external remote command failure (exit 1) is not retryable": {
 			err:  exitErrorWithCode(t, 1),
 			want: false,
 		},
-		{
-			name: "external remote command failure (exit 2) is not retryable",
+		"external remote command failure (exit 2) is not retryable": {
 			err:  exitErrorWithCode(t, 2),
 			want: false,
 		},
-		{
-			name: "external remote command failure (exit 254) is not retryable",
+		"external remote command failure (exit 254) is not retryable": {
 			err:  exitErrorWithCode(t, 254),
 			want: false,
 		},
-		{
-			name: "native ExitError (real remote exit) is NOT retryable",
+		"native ExitError (real remote exit) is NOT retryable": {
 			err:  &gossh.ExitError{},
 			want: false,
 		},
-		{
-			name: "wrapped native ExitError is NOT retryable",
+		"wrapped native ExitError is NOT retryable": {
 			err:  fmt.Errorf("process exited: %w", &gossh.ExitError{}),
 			want: false,
 		},
-		{
-			name: "native ExitMissingError (session torn down, no status) is retryable",
+		"native ExitMissingError (session torn down, no status) is retryable": {
 			err:  &gossh.ExitMissingError{},
 			want: true,
 		},
-		{
-			name: "non-ExitError (binary failed to start) is retryable",
+		"non-ExitError (binary failed to start) is retryable": {
 			err:  errors.New("exec: \"ssh\": executable file not found in $PATH"),
 			want: true,
 		},
-		{
-			name: "context.Canceled is NOT retryable",
+		"context.Canceled is NOT retryable": {
 			err:  context.Canceled,
 			want: false,
 		},
-		{
-			name: "wrapped context.DeadlineExceeded is NOT retryable",
+		"wrapped context.DeadlineExceeded is NOT retryable": {
 			err:  fmt.Errorf("ssh: %w", context.DeadlineExceeded),
 			want: false,
 		},
-		{
-			name: "wrapped external transport ExitError is detected through errors.As",
+		"wrapped external transport ExitError is detected through errors.As": {
 			err:  fmt.Errorf("ssh failed: %w", exitErrorWithCode(t, sshTransportExitStatus)),
 			want: true,
 		},
-		{
-			name: "wrapped external real-command ExitError is not retryable",
+		"wrapped external real-command ExitError is not retryable": {
 			err:  fmt.Errorf("ssh failed: %w", exitErrorWithCode(t, 1)),
 			want: false,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for name, tt := range tests {
+		tt := tt
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			if got := isSSHTransportError(tt.err); got != tt.want {
 				t.Errorf("isSSHTransportError(%v) = %v, want %v", tt.err, got, tt.want)
 			}
@@ -141,45 +131,38 @@ func (c *fakeSeqClient) Start(command string) (io.ReadCloser, io.ReadCloser, err
 }
 func (c *fakeSeqClient) Wait() error { return nil }
 
-// installFakeSSHFactory swaps the package factory and zeroes the retry sleep so
-// the test runs fast. Restores both on cleanup.
-//
-// NOTE: this mutates package-level state (sshClientFactory/sshRetryInterval).
-// Tests that call it (or installFakeSSHClient) MUST NOT use t.Parallel() — the
-// shared globals would race. Top-level tests in this package run sequentially,
-// which is what keeps this safe.
-func installFakeSSHFactory(t *testing.T, factory func(Driver) (ssh.Client, error)) {
-	t.Helper()
-	origFactory := sshClientFactory
-	origInterval := sshRetryInterval
-	sshClientFactory = factory
-	sshRetryInterval = 0
-	t.Cleanup(func() {
-		sshClientFactory = origFactory
-		sshRetryInterval = origInterval
-	})
+// fakeParams builds an sshRunParams that uses the given factory, skips the
+// retry sleep entirely, and runs at most maxAttempts attempts. Each test owns
+// its own params on the stack, so tests can safely run in parallel.
+func fakeParams(factory func(Driver) (ssh.Client, error), maxAttempts int) sshRunParams {
+	return sshRunParams{
+		clientFactory: factory,
+		retryInterval: 0,
+		maxAttempts:   maxAttempts,
+	}
 }
 
-// installFakeSSHClient swaps the package factory to hand back the given client.
-// See installFakeSSHFactory for the no-t.Parallel() constraint.
-func installFakeSSHClient(t *testing.T, client ssh.Client) {
-	t.Helper()
-	installFakeSSHFactory(t, func(Driver) (ssh.Client, error) { return client, nil })
+// fakeParamsForClient is the common case: the factory always returns the same
+// pre-built client.
+func fakeParamsForClient(c ssh.Client, maxAttempts int) sshRunParams {
+	return fakeParams(func(Driver) (ssh.Client, error) { return c, nil }, maxAttempts)
 }
 
 func TestRunSSHCommandFromDriverWithRetry(t *testing.T) {
+	t.Parallel()
+
 	transport := exitErrorWithCode(t, sshTransportExitStatus)
 	realFail := exitErrorWithCode(t, 1)
 
 	t.Run("retries transport failure then succeeds", func(t *testing.T) {
+		t.Parallel()
 		fake := &fakeSeqClient{queue: []cmdResult{
 			{"", transport},
 			{"", transport},
 			{"ok", nil},
 		}}
-		installFakeSSHClient(t, fake)
 
-		out, err := RunSSHCommandFromDriverWithRetry(nil, "apt-get install -y curl")
+		out, err := runSSHCommandFromDriver(nil, "apt-get install -y curl", fakeParamsForClient(fake, sshCommandMaxAttempts))
 		if err != nil {
 			t.Fatalf("expected success after retries, got error: %v", err)
 		}
@@ -192,13 +175,13 @@ func TestRunSSHCommandFromDriverWithRetry(t *testing.T) {
 	})
 
 	t.Run("does NOT retry a genuine command failure", func(t *testing.T) {
+		t.Parallel()
 		fake := &fakeSeqClient{queue: []cmdResult{
 			{"boom", realFail},
 			{"should-not-run", nil},
 		}}
-		installFakeSSHClient(t, fake)
 
-		_, err := RunSSHCommandFromDriverWithRetry(nil, "false")
+		_, err := runSSHCommandFromDriver(nil, "false", fakeParamsForClient(fake, sshCommandMaxAttempts))
 		if err == nil {
 			t.Fatal("expected error for genuine command failure")
 		}
@@ -211,14 +194,14 @@ func TestRunSSHCommandFromDriverWithRetry(t *testing.T) {
 	})
 
 	t.Run("exhausts attempts on persistent transport failure", func(t *testing.T) {
+		t.Parallel()
 		fake := &fakeSeqClient{queue: []cmdResult{
 			{"", transport},
 			{"", transport},
 			{"", transport},
 		}}
-		installFakeSSHClient(t, fake)
 
-		_, err := RunSSHCommandFromDriverWithRetry(nil, "apt-get install -y curl")
+		_, err := runSSHCommandFromDriver(nil, "apt-get install -y curl", fakeParamsForClient(fake, sshCommandMaxAttempts))
 		if err == nil {
 			t.Fatal("expected error after exhausting attempts")
 		}
@@ -228,24 +211,52 @@ func TestRunSSHCommandFromDriverWithRetry(t *testing.T) {
 	})
 }
 
-func TestRunSSHCommandFromDriverIsSingleShot(t *testing.T) {
+// TestRunSSHCommandFromDriverHonorsMaxAttempts pins how runSSHCommandFromDriver
+// reacts to every maxAttempts value the public API actually requests, plus the
+// defensive clamp for 0/negative inputs. The maxAttempts=1 row stands in for
+// the reboot-safety contract of the public RunSSHCommandFromDriver wrapper:
+// a session-severing command (e.g. `sudo shutdown -r now`, which exits 255 on
+// success) must NEVER be re-issued after a transport-class error.
+func TestRunSSHCommandFromDriverHonorsMaxAttempts(t *testing.T) {
+	t.Parallel()
+
 	transport := exitErrorWithCode(t, sshTransportExitStatus)
 
-	fake := &fakeSeqClient{queue: []cmdResult{
-		{"", transport},
-		{"", transport},
-	}}
-	installFakeSSHClient(t, fake)
-
-	// The non-retrying entry point must run exactly once even on a transport
-	// failure, so a session-severing command (e.g. `sudo shutdown -r now`,
-	// which exits 255 on success) is never re-issued.
-	_, err := RunSSHCommandFromDriver(nil, "sudo shutdown -r now")
-	if err == nil {
-		t.Fatal("expected error from single-shot transport failure")
+	cases := []struct {
+		name             string
+		maxAttempts      int
+		wantFactoryCalls int
+	}{
+		{"single-shot pins reboot safety", 1, 1},
+		{"retry uses full attempt budget", sshCommandMaxAttempts, sshCommandMaxAttempts},
+		{"zero is clamped to one", 0, 1},
+		{"negative is clamped to one", -1, 1},
 	}
-	if fake.calls != 1 {
-		t.Errorf("single-shot must run exactly once (reboot safety), got %d calls", fake.calls)
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var factoryCalls int
+			params := fakeParams(func(Driver) (ssh.Client, error) {
+				factoryCalls++
+				// Every attempt gets a fresh client whose queue holds a
+				// single transport failure. If the loop ever ran an extra
+				// attempt past the budget, the next call would hit a fresh
+				// client's transport failure too, so factoryCalls would
+				// exceed wantFactoryCalls and the assertion would fail.
+				return &fakeSeqClient{queue: []cmdResult{{"", transport}}}, nil
+			}, tc.maxAttempts)
+
+			_, err := runSSHCommandFromDriver(nil, "apt-get install -y curl", params)
+			if err == nil {
+				t.Fatal("expected error on persistent transport failure")
+			}
+			if factoryCalls != tc.wantFactoryCalls {
+				t.Errorf("got %d factory calls, want %d", factoryCalls, tc.wantFactoryCalls)
+			}
+		})
 	}
 }
 
@@ -253,22 +264,24 @@ func TestRunSSHCommandFromDriverIsSingleShot(t *testing.T) {
 // "build a fresh client (and therefore a fresh ssh process and connection) on
 // every attempt" behavior. Each attempt gets a brand-new fakeSeqClient whose
 // queue holds exactly ONE transport failure. If the loop ever reused a single
-// client across attempts (a regression that hoists sshClientFactory out of the
-// loop), the second Output call would hit the "unexpected extra Output call"
-// guard and fail this test.
+// client across attempts (a regression that hoists params.clientFactory out of
+// the loop), the second Output call would hit the "unexpected extra Output
+// call" guard and fail this test.
 func TestRunSSHCommandFromDriverWithRetryBuildsFreshClientPerAttempt(t *testing.T) {
+	t.Parallel()
+
 	transport := exitErrorWithCode(t, sshTransportExitStatus)
 
 	var factoryCalls int
 	clients := []*fakeSeqClient{}
-	installFakeSSHFactory(t, func(Driver) (ssh.Client, error) {
+	params := fakeParams(func(Driver) (ssh.Client, error) {
 		factoryCalls++
 		c := &fakeSeqClient{queue: []cmdResult{{"", transport}}}
 		clients = append(clients, c)
 		return c, nil
-	})
+	}, sshCommandMaxAttempts)
 
-	_, err := RunSSHCommandFromDriverWithRetry(nil, "apt-get install -y curl")
+	_, err := runSSHCommandFromDriver(nil, "apt-get install -y curl", params)
 	if err == nil {
 		t.Fatal("expected error after exhausting attempts")
 	}
@@ -287,15 +300,17 @@ func TestRunSSHCommandFromDriverWithRetryBuildsFreshClientPerAttempt(t *testing.
 // transport drop) is returned immediately, without retry and without being
 // wrapped in the "ssh command error" envelope.
 func TestRunSSHCommandFromDriverWithRetryFactoryErrorFailsFast(t *testing.T) {
+	t.Parallel()
+
 	buildErr := errors.New("get ssh port: boom")
 
 	var factoryCalls int
-	installFakeSSHFactory(t, func(Driver) (ssh.Client, error) {
+	params := fakeParams(func(Driver) (ssh.Client, error) {
 		factoryCalls++
 		return nil, buildErr
-	})
+	}, sshCommandMaxAttempts)
 
-	_, err := RunSSHCommandFromDriverWithRetry(nil, "apt-get install -y curl")
+	_, err := runSSHCommandFromDriver(nil, "apt-get install -y curl", params)
 	if !errors.Is(err, buildErr) {
 		t.Fatalf("expected the raw construction error, got %v", err)
 	}
@@ -304,5 +319,34 @@ func TestRunSSHCommandFromDriverWithRetryFactoryErrorFailsFast(t *testing.T) {
 	}
 	if factoryCalls != 1 {
 		t.Errorf("construction failure must fail fast (1 factory call, no retry), got %d", factoryCalls)
+	}
+}
+
+// TestDefaultSSHRunParams pins the wrapper→params wiring that the public
+// entry points depend on. Removing the package-global test seam made the public
+// RunSSHCommandFromDriver / ...WithRetry wrappers un-mockable, so this asserts
+// the params they build instead: single-shot must be exactly 1 attempt (the
+// reboot-safety contract — a regression to defaultSSHRunParams(3) here would
+// otherwise be invisible), retry uses the full budget, and the production
+// factory + retry interval are wired.
+func TestDefaultSSHRunParams(t *testing.T) {
+	t.Parallel()
+
+	single := defaultSSHRunParams(1)
+	if single.maxAttempts != 1 {
+		t.Errorf("defaultSSHRunParams(1).maxAttempts = %d, want 1 (reboot safety)", single.maxAttempts)
+	}
+	if single.clientFactory == nil {
+		t.Error("defaultSSHRunParams must set a non-nil clientFactory")
+	}
+
+	retry := defaultSSHRunParams(sshCommandMaxAttempts)
+	if retry.maxAttempts != sshCommandMaxAttempts {
+		t.Errorf("defaultSSHRunParams(%d).maxAttempts = %d, want %d",
+			sshCommandMaxAttempts, retry.maxAttempts, sshCommandMaxAttempts)
+	}
+	if retry.retryInterval != sshCommandRetryInterval {
+		t.Errorf("defaultSSHRunParams retryInterval = %v, want %v",
+			retry.retryInterval, sshCommandRetryInterval)
 	}
 }

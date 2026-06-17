@@ -33,14 +33,24 @@ const (
 	sshCommandRetryInterval = 3 * time.Second
 )
 
-// sshClientFactory builds an ssh.Client for a driver, and sshRetryInterval is
-// the delay between transport-failure retries. Both are package variables so
-// tests can substitute a fake client and skip real sleeps while exercising the
-// retry loop without a live SSH server. Production code never reassigns them.
-var (
-	sshClientFactory = GetSSHClientFromDriver
-	sshRetryInterval = sshCommandRetryInterval
-)
+// sshRunParams bundles the substitutable parameters of runSSHCommandFromDriver
+// so tests can inject a fake client factory, a zero retry interval, and the
+// desired attempt count without mutating package state (which would force
+// tests to serialize and rule out t.Parallel()). Production callers build
+// these via defaultSSHRunParams.
+type sshRunParams struct {
+	clientFactory func(Driver) (ssh.Client, error)
+	retryInterval time.Duration
+	maxAttempts   int
+}
+
+func defaultSSHRunParams(maxAttempts int) sshRunParams {
+	return sshRunParams{
+		clientFactory: GetSSHClientFromDriver,
+		retryInterval: sshCommandRetryInterval,
+		maxAttempts:   maxAttempts,
+	}
+}
 
 func GetSSHClientFromDriver(d Driver) (ssh.Client, error) {
 	address, err := d.GetSSHHostname()
@@ -134,7 +144,7 @@ func isSSHTransportError(err error) bool {
 // `sudo shutdown -r now`, which exits 255 because the box reboots), and the
 // WaitForSSH reachability probe (the caller's own loop provides retry there).
 func RunSSHCommandFromDriver(d Driver, command string) (string, error) {
-	return runSSHCommandFromDriver(d, command, 1)
+	return runSSHCommandFromDriver(d, command, defaultSSHRunParams(1))
 }
 
 // RunSSHCommandFromDriverWithRetry runs command, retrying up to
@@ -145,17 +155,25 @@ func RunSSHCommandFromDriver(d Driver, command string) (string, error) {
 // are safe to re-run. It is the mitigation for transient mid-session SSH drops,
 // which are amplified on high-latency / cross-region links.
 func RunSSHCommandFromDriverWithRetry(d Driver, command string) (string, error) {
-	return runSSHCommandFromDriver(d, command, sshCommandMaxAttempts)
+	return runSSHCommandFromDriver(d, command, defaultSSHRunParams(sshCommandMaxAttempts))
 }
 
-func runSSHCommandFromDriver(d Driver, command string, maxAttempts int) (string, error) {
+func runSSHCommandFromDriver(d Driver, command string, params sshRunParams) (string, error) {
 	log.Debugf("About to run SSH command:\n%s", command)
 
 	// Defensive: callers pass a literal here, but guard the internal contract
 	// so a future 0/negative never silently runs the command zero times and
 	// returns a nil-error-formatted failure.
+	maxAttempts := params.maxAttempts
 	if maxAttempts < 1 {
 		maxAttempts = 1
+	}
+
+	// Same defensive contract for the client factory: a zero-value sshRunParams
+	// (a future same-package caller that forgets defaultSSHRunParams) would
+	// otherwise panic on a nil function call. Fall back to the production factory.
+	if params.clientFactory == nil {
+		params.clientFactory = GetSSHClientFromDriver
 	}
 
 	var (
@@ -168,7 +186,7 @@ func runSSHCommandFromDriver(d Driver, command string, maxAttempts int) (string,
 		// connection) on every attempt so a dropped session is fully
 		// re-established rather than reused.
 		var client ssh.Client
-		client, err = sshClientFactory(d)
+		client, err = params.clientFactory(d)
 		if err != nil {
 			// Client construction does NO network I/O — it reads only
 			// local/driver state (hostname, port, key file). The TCP dial,
@@ -182,7 +200,7 @@ func runSSHCommandFromDriver(d Driver, command string, maxAttempts int) (string,
 		}
 
 		output, err = client.Output(command)
-		log.Debugf("SSH cmd err: %v", err)
+		log.Debugf("SSH cmd err, output: %v: %s", err, output)
 		if err == nil {
 			return output, nil
 		}
@@ -192,8 +210,8 @@ func runSSHCommandFromDriver(d Driver, command string, maxAttempts int) (string,
 		}
 
 		log.Debugf("SSH command hit a transport-level error (attempt %d/%d), retrying in %s: %v",
-			attempt, maxAttempts, sshRetryInterval, err)
-		time.Sleep(sshRetryInterval)
+			attempt, maxAttempts, params.retryInterval, err)
+		time.Sleep(params.retryInterval)
 	}
 
 	return "", fmt.Errorf(`ssh command error:
