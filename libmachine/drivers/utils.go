@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
 	"time"
 
 	"github.com/docker/machine/libmachine/log"
@@ -153,9 +155,24 @@ func RunSSHCommandFromDriver(d Driver, command string) (string, error) {
 // unretried. Use this only for idempotent commands — the provisioning commands
 // docker-machine issues (apt-get install, writing certs, systemctl restart)
 // are safe to re-run. It is the mitigation for transient mid-session SSH drops,
-// which are amplified on high-latency / cross-region links.
+// which are amplified on high-latency / cross-region links. The total attempt
+// count defaults to sshCommandMaxAttempts and can be overridden at runtime via
+// the DOCKER_MACHINE_SSH_COMMAND_MAX_ATTEMPTS environment variable.
 func RunSSHCommandFromDriverWithRetry(d Driver, command string) (string, error) {
-	return runSSHCommandFromDriver(d, command, defaultSSHRunParams(sshCommandMaxAttempts))
+	return runSSHCommandFromDriver(d, command, defaultSSHRunParams(defaultSSHCommandMaxAttempts()))
+}
+
+// defaultSSHCommandMaxAttempts is the retry budget for
+// RunSSHCommandFromDriverWithRetry: sshCommandMaxAttempts by default, overridable
+// via the DOCKER_MACHINE_SSH_COMMAND_MAX_ATTEMPTS env var (a positive integer).
+// An unset, unparseable, or <= 0 value falls back to the default.
+func defaultSSHCommandMaxAttempts() int {
+	attempts, err := strconv.Atoi(os.Getenv("DOCKER_MACHINE_SSH_COMMAND_MAX_ATTEMPTS"))
+	if err != nil || attempts <= 0 {
+		return sshCommandMaxAttempts
+	}
+
+	return attempts
 }
 
 func runSSHCommandFromDriver(d Driver, command string, params sshRunParams) (string, error) {

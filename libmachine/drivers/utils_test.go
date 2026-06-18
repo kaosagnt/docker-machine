@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -325,8 +326,10 @@ func TestRunSSHCommandFromDriverWithRetryFactoryErrorFailsFast(t *testing.T) {
 // RunSSHCommandFromDriver / ...WithRetry wrappers un-mockable, so this asserts
 // the params they build instead: single-shot must be exactly 1 attempt (the
 // reboot-safety contract — a regression to defaultSSHRunParams(3) here would
-// otherwise be invisible), retry uses the full budget, and the production
-// factory + retry interval are wired.
+// otherwise be invisible), retry uses the budget produced by
+// defaultSSHCommandMaxAttempts (env-driven; covered separately in
+// TestDefaultSSHCommandMaxAttempts), and the production factory + retry
+// interval are wired.
 func TestDefaultSSHRunParams(t *testing.T) {
 	t.Parallel()
 
@@ -346,5 +349,72 @@ func TestDefaultSSHRunParams(t *testing.T) {
 	if retry.retryInterval != sshCommandRetryInterval {
 		t.Errorf("defaultSSHRunParams retryInterval = %v, want %v",
 			retry.retryInterval, sshCommandRetryInterval)
+	}
+}
+
+// TestDefaultSSHCommandMaxAttempts pins how the env-var override is parsed.
+// Four equivalence classes: empty/unset, parse error, parsed <= 0, and parsed
+// positive. The first three fall back to sshCommandMaxAttempts; the fourth
+// honors the parsed value verbatim (no upper bound).
+//
+// This test is intentionally NOT parallel: t.Setenv forbids it. Every subtest
+// scopes its env mutation to itself via t.Setenv's auto-cleanup.
+func TestDefaultSSHCommandMaxAttempts(t *testing.T) {
+	const envVar = "DOCKER_MACHINE_SSH_COMMAND_MAX_ATTEMPTS"
+
+	cases := map[string]struct {
+		envValue string
+		unset    bool
+		want     int
+	}{
+		"unset uses default":        {"", true, sshCommandMaxAttempts},
+		"empty uses default":        {"", false, sshCommandMaxAttempts},
+		"non-numeric uses default":  {"abc", false, sshCommandMaxAttempts},
+		"float uses default":        {"3.5", false, sshCommandMaxAttempts},
+		"whitespace uses default":   {"  4  ", false, sshCommandMaxAttempts},
+		"overflow uses default":     {"9223372036854775808", false, sshCommandMaxAttempts},
+		"zero uses default":         {"0", false, sshCommandMaxAttempts},
+		"negative uses default":     {"-1", false, sshCommandMaxAttempts},
+		"one is honored":            {"1", false, 1},
+		"positive is honored":       {"5", false, 5},
+		"large positive is honored": {"1000", false, 1000},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if tc.unset {
+				// t.Setenv with "" leaves the var SET to empty, which is a
+				// different state from unset on some platforms. Cover the
+				// truly-unset path explicitly.
+				if prev, ok := os.LookupEnv(envVar); ok {
+					t.Setenv(envVar, prev)
+					os.Unsetenv(envVar)
+				}
+			} else {
+				t.Setenv(envVar, tc.envValue)
+			}
+
+			if got := defaultSSHCommandMaxAttempts(); got != tc.want {
+				t.Errorf("defaultSSHCommandMaxAttempts() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunSSHCommandFromDriverWithRetryWiring pins the exact one-line composition
+// inside RunSSHCommandFromDriverWithRetry, namely
+// defaultSSHRunParams(defaultSSHCommandMaxAttempts()). The env-var parsing is
+// covered by TestDefaultSSHCommandMaxAttempts and the struct wiring by
+// TestDefaultSSHRunParams; this test asserts the two are actually composed
+// together, so a refactor that drops the defaultSSHCommandMaxAttempts() hop
+// (e.g. reverting to a literal constant) would be caught.
+//
+// Not parallel: uses t.Setenv.
+func TestRunSSHCommandFromDriverWithRetryWiring(t *testing.T) {
+	t.Setenv("DOCKER_MACHINE_SSH_COMMAND_MAX_ATTEMPTS", "5")
+
+	got := defaultSSHRunParams(defaultSSHCommandMaxAttempts()).maxAttempts
+	if got != 5 {
+		t.Errorf("defaultSSHRunParams(defaultSSHCommandMaxAttempts()).maxAttempts = %d, want 5", got)
 	}
 }
