@@ -147,8 +147,8 @@ func RunSSHCommandFromDriver(d Driver, command string) (string, error) {
 	return runSSHCommandFromDriver(d, command, defaultSSHRunParams(1))
 }
 
-// RunSSHCommandFromDriverWithRetry runs command, retrying up to
-// sshCommandMaxAttempts times when it fails at the SSH transport layer (a
+// RunSSHCommandFromDriverWithRetry runs command, attempting up to
+// sshCommandMaxAttempts times in total when it fails at the SSH transport layer (a
 // dropped/refused session) while leaving genuine non-zero command exits
 // unretried. Use this only for idempotent commands — the provisioning commands
 // docker-machine issues (apt-get install, writing certs, systemctl restart)
