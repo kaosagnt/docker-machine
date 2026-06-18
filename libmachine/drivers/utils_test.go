@@ -94,7 +94,6 @@ func TestIsSSHTransportError(t *testing.T) {
 	}
 
 	for name, tt := range tests {
-		tt := tt
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			if got := isSSHTransportError(tt.err); got != tt.want {
@@ -234,7 +233,6 @@ func TestRunSSHCommandFromDriverHonorsMaxAttempts(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

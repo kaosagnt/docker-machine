@@ -209,7 +209,7 @@ func runSSHCommandFromDriver(d Driver, command string, params sshRunParams) (str
 			break
 		}
 
-		log.Debugf("SSH command hit a transport-level error (attempt %d/%d), retrying in %s: %v",
+		log.Warnf("SSH command hit a transport-level error (attempt %d/%d), retrying in %s: %v",
 			attempt, maxAttempts, params.retryInterval, err)
 		time.Sleep(params.retryInterval)
 	}
