@@ -29,7 +29,9 @@ type GenericSSHCommander struct {
 }
 
 func (sshCmder GenericSSHCommander) SSHCommand(args string) (string, error) {
-	return drivers.RunSSHCommandFromDriver(sshCmder.Driver, args)
+	// Provisioning commands are idempotent, so retry on transient transport
+	// (mid-session SSH) drops, which are amplified on high-latency links.
+	return drivers.RunSSHCommandFromDriverWithRetry(sshCmder.Driver, args)
 }
 
 func (provisioner *GenericProvisioner) Hostname() (string, error) {
