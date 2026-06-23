@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -751,10 +752,10 @@ const stockout503Body = `{"error":{"code":503,"message":"Region does not current
 // attempt count and fail here, even though the leaf tests stayed green.
 func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
 	t.Run("all selections sync-stockout: every selection attempted, aggregated error", func(t *testing.T) {
-		var bulkInsertCalls int
+		var bulkInsertCalls atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(r.URL.Path, "bulkInsert") {
-				bulkInsertCalls++
+				bulkInsertCalls.Add(1)
 				writeJSONError(w, http.StatusServiceUnavailable, stockout503Body)
 				return
 			}
@@ -775,15 +776,15 @@ func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
 		require.Error(t, err)
 		// The loop must have advanced through ALL three selections, not
 		// aborted on the first synchronous 503.
-		assert.Equal(t, 3, bulkInsertCalls, "loop should attempt every selection on sync stockout")
+		assert.Equal(t, int32(3), bulkInsertCalls.Load(), "loop should attempt every selection on sync stockout")
 		assert.Contains(t, err.Error(), "all 3 bulkInsert selections failed with stockout-class errors")
 	})
 
 	t.Run("fatal sync error on first selection: aborts without advancing", func(t *testing.T) {
-		var bulkInsertCalls int
+		var bulkInsertCalls atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(r.URL.Path, "bulkInsert") {
-				bulkInsertCalls++
+				bulkInsertCalls.Add(1)
 				writeJSONError(w, http.StatusForbidden, `{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded"}]}}`)
 				return
 			}
@@ -803,7 +804,7 @@ func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
 		require.Error(t, err)
 		// A non-stockout (fatal) rejection must short-circuit the loop:
 		// exactly one attempt, and the raw error, not the aggregate.
-		assert.Equal(t, 1, bulkInsertCalls, "fatal error must not advance to the next selection")
+		assert.Equal(t, int32(1), bulkInsertCalls.Load(), "fatal error must not advance to the next selection")
 		assert.Contains(t, err.Error(), "bulkInsert rejected create")
 		assert.NotContains(t, err.Error(), "all 2 bulkInsert selections failed")
 	})
@@ -814,11 +815,11 @@ func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
 	// through the real googleapi decoder, not just the hand-built unit
 	// fixtures.
 	t.Run("429 details-only stockout advances the loop", func(t *testing.T) {
-		var bulkInsertCalls int
+		var bulkInsertCalls atomic.Int32
 		const body = `{"error":{"code":429,"message":"out of capacity","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RESOURCE_AVAILABILITY","domain":"compute.googleapis.com"}]}}`
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(r.URL.Path, "bulkInsert") {
-				bulkInsertCalls++
+				bulkInsertCalls.Add(1)
 				writeJSONError(w, http.StatusTooManyRequests, body)
 				return
 			}
@@ -836,7 +837,7 @@ func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
 		err := c.createInstanceViaBulkInsert(&Driver{Network: "default"})
 
 		require.Error(t, err)
-		assert.Equal(t, 2, bulkInsertCalls, "429 details-only stockout should advance through every selection")
+		assert.Equal(t, int32(2), bulkInsertCalls.Load(), "429 details-only stockout should advance through every selection")
 		assert.Contains(t, err.Error(), "all 2 bulkInsert selections failed with stockout-class errors")
 	})
 }
