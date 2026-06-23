@@ -841,3 +841,261 @@ func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
 		assert.Contains(t, err.Error(), "all 2 bulkInsert selections failed with stockout-class errors")
 	})
 }
+
+func TestZoneFromBulkInsertOp(t *testing.T) {
+	mkOp := func(perLoc map[string]raw.BulkInsertOperationStatus) *raw.Operation {
+		if perLoc == nil {
+			return &raw.Operation{}
+		}
+		return &raw.Operation{
+			InstancesBulkInsertOperationMetadata: &raw.InstancesBulkInsertOperationMetadata{
+				PerLocationStatus: perLoc,
+			},
+		}
+	}
+
+	cases := map[string]struct {
+		op       *raw.Operation
+		wantZone string
+		wantOk   bool
+	}{
+		"nil op": {op: nil, wantOk: false},
+		"no bulkInsert metadata": {
+			op:     &raw.Operation{},
+			wantOk: false,
+		},
+		"single placed zone": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1-b": {CreatedVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+			}),
+			wantZone: "us-east1-b",
+			wantOk:   true,
+		},
+		"failure: zone present but created=0": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1-b": {CreatedVmCount: 0, FailedToCreateVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+			}),
+			wantOk: false,
+		},
+		"empty perLocationStatus map": {
+			op:     mkOp(map[string]raw.BulkInsertOperationStatus{}),
+			wantOk: false,
+		},
+		"multi-zone, exactly one created -> that zone": {
+			// Defensive: a failed attempt in one zone plus a success in
+			// another. The created one is unambiguous.
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1-c": {CreatedVmCount: 0, FailedToCreateVmCount: 1},
+				"zones/us-east1-d": {CreatedVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+			}),
+			wantZone: "us-east1-d",
+			wantOk:   true,
+		},
+		"ambiguous: two zones both created -> no guess": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1-b": {CreatedVmCount: 1},
+				"zones/us-east1-d": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"location key without zones/ prefix -> fallback (not trusted)": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"us-east1-b": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"location key is a self-link -> fallback (not trusted)": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-b": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"location key with empty zone suffix -> fallback": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"location key with trailing whitespace -> fallback": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1-b ": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"location key with leading whitespace -> fallback": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				" zones/us-east1-b": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"region-shaped key (no zone suffix) -> fallback": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"multi-segment region zone parses": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/northamerica-northeast2-a": {CreatedVmCount: 1},
+			}),
+			wantZone: "northamerica-northeast2-a",
+			wantOk:   true,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			zone, ok := zoneFromBulkInsertOp(tc.op)
+			assert.Equal(t, tc.wantOk, ok)
+			assert.Equal(t, tc.wantZone, zone)
+		})
+	}
+}
+
+// TestResolvePlacedZone verifies the zone-resolution decision that backs
+// finishPostCreate: when the bulkInsert operation already reported a
+// placement zone (c.placedZone), resolvePlacedZone returns it WITHOUT
+// issuing an AggregatedList call (the rate-limited, orphan-prone path).
+// When placedZone is empty it must fall back to AggregatedList. We assert
+// by observing whether the test server's AggregatedList path is hit.
+func TestResolvePlacedZone(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		placedZone        string
+		wantAggregatedHit bool
+		wantZone          string
+	}{
+		{name: "placedZone set: no AggregatedList", placedZone: "us-east1-b", wantAggregatedHit: false, wantZone: "us-east1-b"},
+		{name: "placedZone empty: falls back to AggregatedList", placedZone: "", wantAggregatedHit: true, wantZone: "us-east1-c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var aggregatedHit atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/aggregated/instances") {
+					aggregatedHit.Store(true)
+					resp := raw.InstanceAggregatedList{
+						Items: map[string]raw.InstancesScopedList{
+							"zones/us-east1-c": {Instances: []*raw.Instance{{
+								Name: "runner-abc",
+								Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
+							}}},
+						},
+					}
+					body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+					fmt.Fprint(w, body)
+					return
+				}
+				t.Errorf("unexpected non-AggregatedList call to %s", r.URL.Path)
+			}))
+			defer srv.Close()
+
+			c := newBulkInsertComputeUtil(t, srv)
+			c.placedZone = tc.placedZone
+
+			zone, err := c.resolvePlacedZone()
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.wantZone, zone)
+			assert.Equal(t, tc.wantAggregatedHit, aggregatedHit.Load(),
+				"AggregatedList should be called only when placedZone is empty")
+		})
+	}
+}
+
+// TestAttemptBulkInsertForSelection_SuccessSetsPlacedZone is the
+// end-to-end regression guard for #155: a successful bulkInsert must
+// populate c.placedZone from the operation's PerLocationStatus, so the
+// subsequent finishPostCreate resolves the zone WITHOUT an
+// AggregatedList call. A regression (e.g. reverting to waitForRegionOp,
+// or not assigning placedZone) would leave placedZone empty and fail
+// this test.
+func TestAttemptBulkInsertForSelection_SuccessSetsPlacedZone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/aggregated/instances") {
+			t.Errorf("AggregatedList must not be called when the operation reports the zone; got %s", r.URL.Path)
+		}
+		var op raw.Operation
+		switch {
+		case strings.Contains(r.URL.Path, "/instances/bulkInsert"):
+			// The async BulkInsert call returns a (pending) operation.
+			op = raw.Operation{Name: "op-bulk-1", Status: "RUNNING"}
+		case strings.Contains(r.URL.Path, "/operations/op-bulk-1"):
+			// RegionOperations.Wait returns the DONE op carrying the
+			// placed-zone metadata.
+			op = raw.Operation{
+				Name:   "op-bulk-1",
+				Status: "DONE",
+				InstancesBulkInsertOperationMetadata: &raw.InstancesBulkInsertOperationMetadata{
+					PerLocationStatus: map[string]raw.BulkInsertOperationStatus{
+						"zones/us-east1-d": {CreatedVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+					},
+				},
+			}
+		default:
+			op = raw.Operation{Name: "op-bulk-1", Status: "DONE"}
+		}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	c := newBulkInsertComputeUtil(t, srv)
+	c.regionExplicit = "us-east1"
+	// Pre-seed a stale zone to prove the reset path clears it before use.
+	c.placedZone = "stale-zone-from-prior-attempt"
+
+	retryable, err := c.attemptBulkInsertForSelection(&Driver{Network: "default"}, flexSelection{MachineType: "n4-standard-2"})
+
+	require.NoError(t, err)
+	assert.False(t, retryable)
+	assert.Equal(t, "us-east1-d", c.placedZone, "placedZone must come from the operation's PerLocationStatus")
+}
+
+// TestAttemptBulkInsertForSelection_SalvagesZoneOnOpError covers the
+// partial-failure case: the bulkInsert operation completes with an error
+// overall, but its PerLocationStatus shows a VM was placed. The placed
+// zone must be salvaged onto d.ResolvedZone so the later Remove can
+// delete the VM directly instead of orphaning it / relying on the
+// rate-limited AggregatedList lookup.
+func TestAttemptBulkInsertForSelection_SalvagesZoneOnOpError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var op raw.Operation
+		switch {
+		case strings.Contains(r.URL.Path, "/instances/bulkInsert"):
+			op = raw.Operation{Name: "op-bulk-err", Status: "RUNNING"}
+		case strings.Contains(r.URL.Path, "/operations/op-bulk-err"):
+			// DONE but with a (non-stockout) operation error, AND a
+			// placement recorded in PerLocationStatus.
+			op = raw.Operation{
+				Name:   "op-bulk-err",
+				Status: "DONE",
+				Error: &raw.OperationError{
+					Errors: []*raw.OperationErrorErrors{{Code: "INTERNAL_ERROR", Message: "boom"}},
+				},
+				InstancesBulkInsertOperationMetadata: &raw.InstancesBulkInsertOperationMetadata{
+					PerLocationStatus: map[string]raw.BulkInsertOperationStatus{
+						"zones/us-east1-d": {CreatedVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+					},
+				},
+			}
+		default:
+			op = raw.Operation{Name: "op-bulk-err", Status: "DONE"}
+		}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	c := newBulkInsertComputeUtil(t, srv)
+	c.regionExplicit = "us-east1"
+	d := &Driver{Network: "default"}
+
+	retryable, err := c.attemptBulkInsertForSelection(d, flexSelection{MachineType: "n4-standard-2"})
+
+	require.Error(t, err)
+	assert.False(t, retryable, "INTERNAL_ERROR is not stockout-class")
+	// The VM was placed; its zone must be recorded for cleanup.
+	assert.Equal(t, "us-east1-d", d.ResolvedZone, "placed zone must be salvaged onto the Driver for Remove")
+	// placedZone (the success-path field) must NOT be set on a failed op.
+	assert.Empty(t, c.placedZone)
+}
