@@ -57,6 +57,15 @@ type ComputeUtil struct {
 	locationZones  []string
 	bulkInsert     bool
 
+	// placedZone is the zone a successful bulkInsert operation reported
+	// placing the VM in, read from the operation's
+	// InstancesBulkInsertOperationMetadata. finishPostCreate prefers it
+	// over an AggregatedList lookup. Empty when the operation did not
+	// unambiguously report a placement zone (then we fall back to
+	// AggregatedList). Set per attempt; only meaningful immediately
+	// after a successful attemptBulkInsertForSelection.
+	placedZone string
+
 	operationBackoffFactory *backoffFactory
 }
 
@@ -715,12 +724,47 @@ func (e *operationError) Error() string {
 	return fmt.Sprintf("operation error: %v", *e.OperationErrorErrors)
 }
 
+// firstNonNilOpError returns the first non-nil entry in a GCE operation
+// error list, or nil if the slice is empty or holds only nil entries.
+// Guards against a malformed/partial error payload, where indexing or
+// embedding a nil *OperationErrorErrors would later nil-deref.
+func firstNonNilOpError(errs []*raw.OperationErrorErrors) *raw.OperationErrorErrors {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
 // waitForOp waits for the operation to finish.
+//
+// Thin wrapper over waitForOpResult for callers that only care whether
+// the operation succeeded. New callers that need the completed
+// Operation (e.g. bulkInsert, to read placement metadata) should use
+// waitForOpResult directly.
 func (c *ComputeUtil) waitForOp(opGetter func() (*raw.Operation, error)) error {
+	_, err := c.waitForOpResult(opGetter)
+	return err
+}
+
+// waitForOpResult polls until the operation reaches DONE and returns
+// the completed Operation, or the backoff deadline elapses.
+//
+// On a DONE operation carrying an error it returns an error AND the
+// completed Operation (including when the error payload is empty or
+// malformed), so callers can still inspect operation metadata — e.g. a
+// bulkInsert that errored overall but already placed a VM, recorded in
+// InstancesBulkInsertOperationMetadata; salvaging that zone lets the
+// caller clean the VM up instead of orphaning it. The Operation is nil
+// only when there is nothing to inspect: a getter error, a nil op, or
+// backoff exhaustion. On success the completed Operation is returned
+// with a nil error.
+func (c *ComputeUtil) waitForOpResult(opGetter func() (*raw.Operation, error)) (*raw.Operation, error) {
 	var next time.Duration
 
 	if c.operationBackoffFactory == nil {
-		return errors.New("operationBackoffFactory is not defined")
+		return nil, errors.New("operationBackoffFactory is not defined")
 	}
 
 	b := c.operationBackoffFactory.create()
@@ -729,25 +773,38 @@ func (c *ComputeUtil) waitForOp(opGetter func() (*raw.Operation, error)) error {
 	for {
 		op, err := opGetter()
 		if err != nil {
-			return err
+			return nil, err
+		}
+		// Defensive: a malformed client/server response could yield a
+		// nil operation with no error. Don't dereference it.
+		if op == nil {
+			return nil, errors.New("operation wait returned a nil operation")
 		}
 
 		log.Debugf("Operation %q status: %s", op.Name, op.Status)
 		if op.Status == "DONE" {
 			if op.Error != nil {
-				return &operationError{OperationErrorErrors: op.Error.Errors[0]}
+				// op.Error.Errors is normally a non-empty slice of
+				// non-nil entries, but guard both so a partial/malformed
+				// error payload can't panic the manager (a nil embedded
+				// *OperationErrorErrors would nil-deref on .Code via the
+				// promoted field). Return the op alongside any error so a
+				// failed operation's placement metadata can still be
+				// salvaged.
+				if first := firstNonNilOpError(op.Error.Errors); first != nil {
+					return op, &operationError{OperationErrorErrors: first}
+				}
+				return op, fmt.Errorf("operation %q failed with an empty or malformed error payload", op.Name)
 			}
-			break
+			return op, nil
 		}
 
 		if next = b.NextBackOff(); next == backoff.Stop {
-			return errors.New("maximum backoff elapsed time exceeded")
+			return nil, errors.New("maximum backoff elapsed time exceeded")
 		}
 
 		time.Sleep(next)
 	}
-
-	return nil
 }
 
 // waitForRegionalOp waits for the regional operation to finish.
@@ -766,6 +823,15 @@ func (c *ComputeUtil) waitForRegionalOp(name string) error {
 // that one polls ZoneOperations under a misleading name.
 func (c *ComputeUtil) waitForRegionOp(name string) error {
 	return c.waitForOp(func() (*raw.Operation, error) {
+		return c.service.RegionOperations.Wait(c.project, c.region(), name).Do()
+	})
+}
+
+// waitForRegionOpResult is waitForRegionOp but returns the completed
+// Operation, so the bulkInsert path can read placement metadata
+// (InstancesBulkInsertOperationMetadata) without a separate lookup.
+func (c *ComputeUtil) waitForRegionOpResult(name string) (*raw.Operation, error) {
+	return c.waitForOpResult(func() (*raw.Operation, error) {
 		return c.service.RegionOperations.Wait(c.project, c.region(), name).Do()
 	})
 }

@@ -1,13 +1,21 @@
 package google
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	raw "google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
+	"google.golang.org/api/option"
 )
 
 func TestParseLocationZoneEntry(t *testing.T) {
@@ -344,6 +352,199 @@ func TestIsStockoutError(t *testing.T) {
 	}
 }
 
+func TestIsStockoutAPIError(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		want bool
+	}{
+		"nil":                      {err: nil, want: false},
+		"plain error not stockout": {err: errors.New("network blew up"), want: false},
+		"operationError not an API error": {
+			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "VM_MIN_COUNT_NOT_REACHED"}},
+			want: false,
+		},
+		"503 insufficientCapacity is stockout": {
+			err: &googleapi.Error{
+				Code:   503,
+				Errors: []googleapi.ErrorItem{{Reason: "insufficientCapacity", Message: "Region does not currently have sufficient capacity"}},
+			},
+			want: true,
+		},
+		"wrapped 503 insufficientCapacity still classified": {
+			err: fmt.Errorf("bulkInsert rejected create for %q in %q: %w", "tm", "us-east1",
+				&googleapi.Error{
+					Code:   503,
+					Errors: []googleapi.ErrorItem{{Reason: "insufficientCapacity"}},
+				},
+			),
+			want: true,
+		},
+		"503 with unrelated reason is fatal": {
+			err: &googleapi.Error{
+				Code:   503,
+				Errors: []googleapi.ErrorItem{{Reason: "backendError"}},
+			},
+			want: false,
+		},
+		"403 quota is fatal": {
+			err: &googleapi.Error{
+				Code:   403,
+				Errors: []googleapi.ErrorItem{{Reason: "quotaExceeded"}},
+			},
+			want: false,
+		},
+		"api error with no error items is fatal": {
+			err:  &googleapi.Error{Code: 503},
+			want: false,
+		},
+		"multiple reasons, one stockout, is stockout": {
+			err: &googleapi.Error{
+				Code:   503,
+				Errors: []googleapi.ErrorItem{{Reason: "rateLimitExceeded"}, {Reason: "insufficientCapacity"}},
+			},
+			want: true,
+		},
+		"503 ZONE_RESOURCE_POOL_EXHAUSTED is stockout": {
+			err: &googleapi.Error{
+				Code:   503,
+				Errors: []googleapi.ErrorItem{{Reason: "ZONE_RESOURCE_POOL_EXHAUSTED"}},
+			},
+			want: true,
+		},
+		"503 ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS is stockout": {
+			err: &googleapi.Error{
+				Code:   503,
+				Errors: []googleapi.ErrorItem{{Reason: "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS"}},
+			},
+			want: true,
+		},
+		"503 RESOURCE_POOL_EXHAUSTED (non-zonal) is stockout": {
+			err: &googleapi.Error{
+				Code:   503,
+				Errors: []googleapi.ErrorItem{{Reason: "RESOURCE_POOL_EXHAUSTED"}},
+			},
+			want: true,
+		},
+		"429 RESOURCE_AVAILABILITY (AIP-193 canonical) is stockout": {
+			err: &googleapi.Error{
+				Code:   429,
+				Errors: []googleapi.ErrorItem{{Reason: "RESOURCE_AVAILABILITY"}},
+			},
+			want: true,
+		},
+		"429 quotaExceeded is fatal (quota, not capacity)": {
+			err: &googleapi.Error{
+				Code:   429,
+				Errors: []googleapi.ErrorItem{{Reason: "quotaExceeded"}},
+			},
+			want: false,
+		},
+		"403 with capacity-like reason is fatal (wrong status)": {
+			err: &googleapi.Error{
+				Code:   403,
+				Errors: []googleapi.ErrorItem{{Reason: "insufficientCapacity"}},
+			},
+			want: false,
+		},
+		"capacity reason in Details ErrorInfo is stockout": {
+			err: &googleapi.Error{
+				Code: 429,
+				Details: []interface{}{
+					map[string]interface{}{
+						"@type":  "type.googleapis.com/google.rpc.ErrorInfo",
+						"reason": "RESOURCE_AVAILABILITY",
+						"domain": "compute.googleapis.com",
+					},
+				},
+			},
+			want: true,
+		},
+		"non-capacity reason in Details ErrorInfo is fatal": {
+			err: &googleapi.Error{
+				Code: 429,
+				Details: []interface{}{
+					map[string]interface{}{
+						"@type":  "type.googleapis.com/google.rpc.ErrorInfo",
+						"reason": "RATE_LIMIT_EXCEEDED",
+						"domain": "compute.googleapis.com",
+					},
+				},
+			},
+			want: false,
+		},
+		"capacity reason on wrong Details @type is fatal": {
+			err: &googleapi.Error{
+				Code: 429,
+				Details: []interface{}{
+					map[string]interface{}{
+						"@type":  "type.googleapis.com/google.rpc.Help",
+						"reason": "RESOURCE_AVAILABILITY",
+					},
+				},
+			},
+			want: false,
+		},
+		"capacity reason with absent Details @type is stockout (tolerant)": {
+			err: &googleapi.Error{
+				Code: 429,
+				Details: []interface{}{
+					map[string]interface{}{"reason": "RESOURCE_AVAILABILITY"},
+				},
+			},
+			want: true,
+		},
+		"capacity reason with present non-string Details @type is fatal": {
+			err: &googleapi.Error{
+				Code: 429,
+				Details: []interface{}{
+					map[string]interface{}{"@type": 123, "reason": "RESOURCE_AVAILABILITY"},
+				},
+			},
+			want: false,
+		},
+		"capacity reason with null Details @type is fatal": {
+			err: &googleapi.Error{
+				Code: 429,
+				Details: []interface{}{
+					map[string]interface{}{"@type": nil, "reason": "RESOURCE_AVAILABILITY"},
+				},
+			},
+			want: false,
+		},
+		"Details capacity reason but wrong status is fatal": {
+			err: &googleapi.Error{
+				Code: 400,
+				Details: []interface{}{
+					map[string]interface{}{"reason": "RESOURCE_AVAILABILITY"},
+				},
+			},
+			want: false,
+		},
+		"Details entry not a map is ignored (no panic)": {
+			err: &googleapi.Error{
+				Code:    503,
+				Details: []interface{}{"some string detail", 42},
+			},
+			want: false,
+		},
+		"Details reason field not a string is ignored": {
+			err: &googleapi.Error{
+				Code: 503,
+				Details: []interface{}{
+					map[string]interface{}{"reason": 123},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isStockoutAPIError(tc.err))
+		})
+	}
+}
+
 func TestEffectiveFlexSelections_SynthesisedFromMachineType(t *testing.T) {
 	// With --google-bulk-insert but no --google-flex-selection, the
 	// loop iterates a single selection synthesised from
@@ -424,4 +625,477 @@ func TestUsesBulkInsert(t *testing.T) {
 		d := &Driver{BulkInsert: true, Region: "us-east1"}
 		assert.True(t, d.BulkInsert)
 	})
+}
+
+// writeJSONError writes body as a GCE-style JSON error response with
+// the given status and an application/json content-type, matching the
+// shape googleapi clients receive in production. Preferred over
+// http.Error, which forces text/plain and appends a newline.
+func writeJSONError(w http.ResponseWriter, status int, body string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
+}
+
+// newBulkInsertComputeUtil builds a ComputeUtil pointed at a test
+// server, sufficient to drive attemptBulkInsertForSelection up to the
+// RegionInstances.BulkInsert call.
+func newBulkInsertComputeUtil(t *testing.T, srv *httptest.Server) *ComputeUtil {
+	t.Helper()
+	svc, err := raw.NewService(context.Background(), option.WithoutAuthentication(), option.WithEndpoint(srv.URL))
+	require.NoError(t, err)
+	return &ComputeUtil{
+		instanceName: "runner-abc",
+		project:      "p",
+		zone:         "us-east1-c",
+		globalURL:    apiURL + "p/global",
+		service:      svc,
+		bulkInsert:   true,
+		operationBackoffFactory: &backoffFactory{
+			InitialInterval:     time.Millisecond,
+			RandomizationFactor: 0,
+			Multiplier:          2,
+			MaxInterval:         10 * time.Millisecond,
+			MaxElapsedTime:      time.Second,
+		},
+	}
+}
+
+// TestAttemptBulkInsertForSelection_SyncStockoutIsRetryable is the
+// regression test for the 2026-06-22 incident: a synchronous HTTP 503
+// insufficientCapacity rejection from BulkInsert must be classified as
+// retryable so the loop advances to the next flex selection, instead of
+// aborting the whole create.
+func TestAttemptBulkInsertForSelection_SyncStockoutIsRetryable(t *testing.T) {
+	cases := map[string]struct {
+		status        int
+		body          string
+		wantRetryable bool
+		wantErr       bool
+	}{
+		"503 insufficientCapacity -> retryable": {
+			status:        http.StatusServiceUnavailable,
+			body:          `{"error":{"code":503,"message":"Region does not currently have sufficient capacity for the requested resources.","errors":[{"reason":"insufficientCapacity","message":"insufficient capacity"}]}}`,
+			wantRetryable: true,
+			wantErr:       true,
+		},
+		"403 quotaExceeded -> fatal": {
+			status:        http.StatusForbidden,
+			body:          `{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded"}]}}`,
+			wantRetryable: false,
+			wantErr:       true,
+		},
+		"503 backendError -> fatal": {
+			status:        http.StatusServiceUnavailable,
+			body:          `{"error":{"code":503,"message":"backend hiccup","errors":[{"reason":"backendError"}]}}`,
+			wantRetryable: false,
+			wantErr:       true,
+		},
+		// 429 capacity, real-decoded through googleapi: proves the
+		// status gate accepts 429 end-to-end, not just 503.
+		"429 RESOURCE_AVAILABILITY -> retryable": {
+			status:        http.StatusTooManyRequests,
+			body:          `{"error":{"code":429,"message":"The zone does not have enough resources available.","errors":[{"reason":"RESOURCE_AVAILABILITY"}]}}`,
+			wantRetryable: true,
+			wantErr:       true,
+		},
+		// 429 quota, real-decoded: must stay fatal (quota != capacity).
+		"429 quotaExceeded -> fatal": {
+			status:        http.StatusTooManyRequests,
+			body:          `{"error":{"code":429,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded"}]}}`,
+			wantRetryable: false,
+			wantErr:       true,
+		},
+		// Capacity reason carried ONLY in details[] (google.rpc.ErrorInfo),
+		// with no legacy errors[]. This proves the real googleapi decoder
+		// produces the map[string]interface{} shape isStockoutAPIError
+		// reads from Details — the load-bearing assumption of that branch.
+		"429 capacity in details[] only -> retryable": {
+			status:        http.StatusTooManyRequests,
+			body:          `{"error":{"code":429,"message":"out of capacity","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RESOURCE_AVAILABILITY","domain":"compute.googleapis.com"}]}}`,
+			wantRetryable: true,
+			wantErr:       true,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				writeJSONError(w, tc.status, tc.body)
+			}))
+			defer srv.Close()
+
+			c := newBulkInsertComputeUtil(t, srv)
+			retryable, err := c.attemptBulkInsertForSelection(&Driver{Network: "default"}, flexSelection{MachineType: "n2d-standard-2"})
+
+			assert.Equal(t, tc.wantRetryable, retryable)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+const stockout503Body = `{"error":{"code":503,"message":"Region does not currently have sufficient capacity for the requested resources.","errors":[{"reason":"insufficientCapacity","message":"insufficient capacity"}]}}`
+
+// TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout is the
+// end-to-end regression guard for the 2026-06-22 incident. The leaf
+// test above proves attemptBulkInsertForSelection *returns*
+// retryable=true on a sync 503; this proves the loop in
+// createInstanceViaBulkInsert actually *acts* on it — advancing across
+// selections rather than aborting on the first synchronous stockout.
+//
+// It counts BulkInsert POSTs server-side so a regression that dropped
+// the fall-through (e.g. inverted `if !retryable`) would change the
+// attempt count and fail here, even though the leaf tests stayed green.
+func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
+	t.Run("all selections sync-stockout: every selection attempted, aggregated error", func(t *testing.T) {
+		var bulkInsertCalls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "bulkInsert") {
+				bulkInsertCalls.Add(1)
+				writeJSONError(w, http.StatusServiceUnavailable, stockout503Body)
+				return
+			}
+			t.Errorf("unexpected non-bulkInsert call to %s", r.URL.Path)
+		}))
+		defer srv.Close()
+
+		c := newBulkInsertComputeUtil(t, srv)
+		c.regionExplicit = "us-east1"
+		c.flexSelections = []string{
+			"machine-type=n4d-standard-2",
+			"machine-type=n2d-standard-2",
+			"machine-type=n4-standard-2",
+		}
+
+		err := c.createInstanceViaBulkInsert(&Driver{Network: "default"})
+
+		require.Error(t, err)
+		// The loop must have advanced through ALL three selections, not
+		// aborted on the first synchronous 503.
+		assert.Equal(t, int32(3), bulkInsertCalls.Load(), "loop should attempt every selection on sync stockout")
+		assert.Contains(t, err.Error(), "all 3 bulkInsert selections failed with stockout-class errors")
+	})
+
+	t.Run("fatal sync error on first selection: aborts without advancing", func(t *testing.T) {
+		var bulkInsertCalls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "bulkInsert") {
+				bulkInsertCalls.Add(1)
+				writeJSONError(w, http.StatusForbidden, `{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded"}]}}`)
+				return
+			}
+			t.Errorf("unexpected non-bulkInsert call to %s", r.URL.Path)
+		}))
+		defer srv.Close()
+
+		c := newBulkInsertComputeUtil(t, srv)
+		c.regionExplicit = "us-east1"
+		c.flexSelections = []string{
+			"machine-type=n4d-standard-2",
+			"machine-type=n2d-standard-2",
+		}
+
+		err := c.createInstanceViaBulkInsert(&Driver{Network: "default"})
+
+		require.Error(t, err)
+		// A non-stockout (fatal) rejection must short-circuit the loop:
+		// exactly one attempt, and the raw error, not the aggregate.
+		assert.Equal(t, int32(1), bulkInsertCalls.Load(), "fatal error must not advance to the next selection")
+		assert.Contains(t, err.Error(), "bulkInsert rejected create")
+		assert.NotContains(t, err.Error(), "all 2 bulkInsert selections failed")
+	})
+
+	// Proves the loop also advances on a 429 whose capacity reason is
+	// carried ONLY in details[] (no legacy errors[]) — exercising the
+	// 429 status branch and the Details[] reason branch end-to-end
+	// through the real googleapi decoder, not just the hand-built unit
+	// fixtures.
+	t.Run("429 details-only stockout advances the loop", func(t *testing.T) {
+		var bulkInsertCalls atomic.Int32
+		const body = `{"error":{"code":429,"message":"out of capacity","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RESOURCE_AVAILABILITY","domain":"compute.googleapis.com"}]}}`
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "bulkInsert") {
+				bulkInsertCalls.Add(1)
+				writeJSONError(w, http.StatusTooManyRequests, body)
+				return
+			}
+			t.Errorf("unexpected non-bulkInsert call to %s", r.URL.Path)
+		}))
+		defer srv.Close()
+
+		c := newBulkInsertComputeUtil(t, srv)
+		c.regionExplicit = "us-east1"
+		c.flexSelections = []string{
+			"machine-type=n4d-standard-2",
+			"machine-type=n2d-standard-2",
+		}
+
+		err := c.createInstanceViaBulkInsert(&Driver{Network: "default"})
+
+		require.Error(t, err)
+		assert.Equal(t, int32(2), bulkInsertCalls.Load(), "429 details-only stockout should advance through every selection")
+		assert.Contains(t, err.Error(), "all 2 bulkInsert selections failed with stockout-class errors")
+	})
+}
+
+func TestZoneFromBulkInsertOp(t *testing.T) {
+	mkOp := func(perLoc map[string]raw.BulkInsertOperationStatus) *raw.Operation {
+		if perLoc == nil {
+			return &raw.Operation{}
+		}
+		return &raw.Operation{
+			InstancesBulkInsertOperationMetadata: &raw.InstancesBulkInsertOperationMetadata{
+				PerLocationStatus: perLoc,
+			},
+		}
+	}
+
+	cases := map[string]struct {
+		op       *raw.Operation
+		wantZone string
+		wantOk   bool
+	}{
+		"nil op": {op: nil, wantOk: false},
+		"no bulkInsert metadata": {
+			op:     &raw.Operation{},
+			wantOk: false,
+		},
+		"single placed zone": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1-b": {CreatedVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+			}),
+			wantZone: "us-east1-b",
+			wantOk:   true,
+		},
+		"failure: zone present but created=0": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1-b": {CreatedVmCount: 0, FailedToCreateVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+			}),
+			wantOk: false,
+		},
+		"empty perLocationStatus map": {
+			op:     mkOp(map[string]raw.BulkInsertOperationStatus{}),
+			wantOk: false,
+		},
+		"multi-zone, exactly one created -> that zone": {
+			// Defensive: a failed attempt in one zone plus a success in
+			// another. The created one is unambiguous.
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1-c": {CreatedVmCount: 0, FailedToCreateVmCount: 1},
+				"zones/us-east1-d": {CreatedVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+			}),
+			wantZone: "us-east1-d",
+			wantOk:   true,
+		},
+		"ambiguous: two zones both created -> no guess": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1-b": {CreatedVmCount: 1},
+				"zones/us-east1-d": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"location key without zones/ prefix -> fallback (not trusted)": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"us-east1-b": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"location key is a self-link -> fallback (not trusted)": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-b": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"location key with empty zone suffix -> fallback": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"location key with trailing whitespace -> fallback": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1-b ": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"location key with leading whitespace -> fallback": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				" zones/us-east1-b": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"region-shaped key (no zone suffix) -> fallback": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/us-east1": {CreatedVmCount: 1},
+			}),
+			wantOk: false,
+		},
+		"multi-segment region zone parses": {
+			op: mkOp(map[string]raw.BulkInsertOperationStatus{
+				"zones/northamerica-northeast2-a": {CreatedVmCount: 1},
+			}),
+			wantZone: "northamerica-northeast2-a",
+			wantOk:   true,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			zone, ok := zoneFromBulkInsertOp(tc.op)
+			assert.Equal(t, tc.wantOk, ok)
+			assert.Equal(t, tc.wantZone, zone)
+		})
+	}
+}
+
+// TestResolvePlacedZone verifies the zone-resolution decision that backs
+// finishPostCreate: when the bulkInsert operation already reported a
+// placement zone (c.placedZone), resolvePlacedZone returns it WITHOUT
+// issuing an AggregatedList call (the rate-limited, orphan-prone path).
+// When placedZone is empty it must fall back to AggregatedList. We assert
+// by observing whether the test server's AggregatedList path is hit.
+func TestResolvePlacedZone(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		placedZone        string
+		wantAggregatedHit bool
+		wantZone          string
+	}{
+		{name: "placedZone set: no AggregatedList", placedZone: "us-east1-b", wantAggregatedHit: false, wantZone: "us-east1-b"},
+		{name: "placedZone empty: falls back to AggregatedList", placedZone: "", wantAggregatedHit: true, wantZone: "us-east1-c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var aggregatedHit atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/aggregated/instances") {
+					aggregatedHit.Store(true)
+					resp := raw.InstanceAggregatedList{
+						Items: map[string]raw.InstancesScopedList{
+							"zones/us-east1-c": {Instances: []*raw.Instance{{
+								Name: "runner-abc",
+								Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
+							}}},
+						},
+					}
+					body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+					fmt.Fprint(w, body)
+					return
+				}
+				t.Errorf("unexpected non-AggregatedList call to %s", r.URL.Path)
+			}))
+			defer srv.Close()
+
+			c := newBulkInsertComputeUtil(t, srv)
+			c.placedZone = tc.placedZone
+
+			zone, err := c.resolvePlacedZone()
+			require.NoError(t, err)
+
+			assert.Equal(t, tc.wantZone, zone)
+			assert.Equal(t, tc.wantAggregatedHit, aggregatedHit.Load(),
+				"AggregatedList should be called only when placedZone is empty")
+		})
+	}
+}
+
+// TestAttemptBulkInsertForSelection_SuccessSetsPlacedZone is the
+// end-to-end regression guard for #155: a successful bulkInsert must
+// populate c.placedZone from the operation's PerLocationStatus, so the
+// subsequent finishPostCreate resolves the zone WITHOUT an
+// AggregatedList call. A regression (e.g. reverting to waitForRegionOp,
+// or not assigning placedZone) would leave placedZone empty and fail
+// this test.
+func TestAttemptBulkInsertForSelection_SuccessSetsPlacedZone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/aggregated/instances") {
+			t.Errorf("AggregatedList must not be called when the operation reports the zone; got %s", r.URL.Path)
+		}
+		var op raw.Operation
+		switch {
+		case strings.Contains(r.URL.Path, "/instances/bulkInsert"):
+			// The async BulkInsert call returns a (pending) operation.
+			op = raw.Operation{Name: "op-bulk-1", Status: "RUNNING"}
+		case strings.Contains(r.URL.Path, "/operations/op-bulk-1"):
+			// RegionOperations.Wait returns the DONE op carrying the
+			// placed-zone metadata.
+			op = raw.Operation{
+				Name:   "op-bulk-1",
+				Status: "DONE",
+				InstancesBulkInsertOperationMetadata: &raw.InstancesBulkInsertOperationMetadata{
+					PerLocationStatus: map[string]raw.BulkInsertOperationStatus{
+						"zones/us-east1-d": {CreatedVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+					},
+				},
+			}
+		default:
+			op = raw.Operation{Name: "op-bulk-1", Status: "DONE"}
+		}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	c := newBulkInsertComputeUtil(t, srv)
+	c.regionExplicit = "us-east1"
+	// Pre-seed a stale zone to prove the reset path clears it before use.
+	c.placedZone = "stale-zone-from-prior-attempt"
+
+	retryable, err := c.attemptBulkInsertForSelection(&Driver{Network: "default"}, flexSelection{MachineType: "n4-standard-2"})
+
+	require.NoError(t, err)
+	assert.False(t, retryable)
+	assert.Equal(t, "us-east1-d", c.placedZone, "placedZone must come from the operation's PerLocationStatus")
+}
+
+// TestAttemptBulkInsertForSelection_SalvagesZoneOnOpError covers the
+// partial-failure case: the bulkInsert operation completes with an error
+// overall, but its PerLocationStatus shows a VM was placed. The placed
+// zone must be salvaged onto d.ResolvedZone so the later Remove can
+// delete the VM directly instead of orphaning it / relying on the
+// rate-limited AggregatedList lookup.
+func TestAttemptBulkInsertForSelection_SalvagesZoneOnOpError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var op raw.Operation
+		switch {
+		case strings.Contains(r.URL.Path, "/instances/bulkInsert"):
+			op = raw.Operation{Name: "op-bulk-err", Status: "RUNNING"}
+		case strings.Contains(r.URL.Path, "/operations/op-bulk-err"):
+			// DONE but with a (non-stockout) operation error, AND a
+			// placement recorded in PerLocationStatus.
+			op = raw.Operation{
+				Name:   "op-bulk-err",
+				Status: "DONE",
+				Error: &raw.OperationError{
+					Errors: []*raw.OperationErrorErrors{{Code: "INTERNAL_ERROR", Message: "boom"}},
+				},
+				InstancesBulkInsertOperationMetadata: &raw.InstancesBulkInsertOperationMetadata{
+					PerLocationStatus: map[string]raw.BulkInsertOperationStatus{
+						"zones/us-east1-d": {CreatedVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+					},
+				},
+			}
+		default:
+			op = raw.Operation{Name: "op-bulk-err", Status: "DONE"}
+		}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	c := newBulkInsertComputeUtil(t, srv)
+	c.regionExplicit = "us-east1"
+	d := &Driver{Network: "default"}
+
+	retryable, err := c.attemptBulkInsertForSelection(d, flexSelection{MachineType: "n4-standard-2"})
+
+	require.Error(t, err)
+	assert.False(t, retryable, "INTERNAL_ERROR is not stockout-class")
+	// The VM was placed; its zone must be recorded for cleanup.
+	assert.Equal(t, "us-east1-d", d.ResolvedZone, "placed zone must be salvaged onto the Driver for Remove")
+	// placedZone (the success-path field) must NOT be set on a failed op.
+	assert.Empty(t, c.placedZone)
 }

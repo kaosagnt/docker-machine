@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -38,9 +39,19 @@ import (
 
 	"github.com/docker/machine/libmachine/log"
 	raw "google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
 )
 
 var zonePathSegment = regexp.MustCompile(`/zones/([^/]+)`)
+
+// gceZoneName matches a well-formed GCE zone name: a region segment
+// (letters, then a digit-bearing tail like "us-east1") followed by a
+// single-letter zone suffix, e.g. "us-east1-b", "europe-west4-a".
+// Requiring the trailing "-<letter>" rejects region-shaped strings
+// (e.g. "us-east1") and malformed keys (whitespace, self-links), so a
+// bad metadata key falls through to the authoritative AggregatedList
+// lookup instead of producing a wrong zone URL.
+var gceZoneName = regexp.MustCompile(`^[a-z]+-[a-z]*[0-9]+-[a-z]$`)
 var machineTypePathSegment = regexp.MustCompile(`/machineTypes/([^/]+)$`)
 
 // bootDeviceName is the deviceName we set on the template boot disk.
@@ -64,6 +75,62 @@ var stockoutErrorCodes = map[string]struct{}{
 	"ZONE_RESOURCE_POOL_EXHAUSTED":              {},
 	"ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS": {},
 }
+
+// stockoutAPIReasons are googleapi error reasons we treat as
+// "try the next selection" when the BulkInsert call is rejected
+// synchronously (i.e. the .Do() returns an error before any
+// operation is created), rather than failing asynchronously via the
+// operation. A synchronous capacity rejection is the same shortage as
+// the async VM_MIN_COUNT_NOT_REACHED / ZONE_RESOURCE_POOL_EXHAUSTED
+// path (handled by isStockoutError) — just surfaced on the sync path —
+// so it must fall through to the next ranked machine type, not abort
+// the whole create.
+//
+// The set spans the reasons GCE has been observed to use AND the ones
+// GCP documents, because the wire string is server-supplied and not
+// stable across surfaces:
+//   - insufficientCapacity: observed in production 2026-06-22 — every
+//     amd64 shard terminated at the n2d selection on
+//     "Error 503 …insufficientCapacity" without advancing to the
+//     n4 / t2d selections that still had capacity, because synchronous
+//     rejections were uniformly treated as fatal. This exact string is
+//     NOT in GCP's published error tables (verified), so it is pinned
+//     here as an observed value, not a documented one. See incident
+//     notes runner-bulkinsert-flex-fallback-broken.
+//   - ZONE_RESOURCE_POOL_EXHAUSTED[_WITH_DETAILS] / RESOURCE_POOL_EXHAUSTED:
+//     GCP's documented zonal capacity codes (troubleshooting-vm-creation).
+//   - RESOURCE_AVAILABILITY: the AIP-193 canonical capacity reason
+//     (paired with HTTP 429 RESOURCE_EXHAUSTED).
+//
+// QUOTA_EXCEEDED is deliberately ABSENT: a quota wall is not a
+// stockout, and trying another machine type usually hits the same or
+// another quota — it must stay fatal.
+var stockoutAPIReasons = map[string]struct{}{
+	"insufficientCapacity":                      {},
+	"ZONE_RESOURCE_POOL_EXHAUSTED":              {},
+	"ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS": {},
+	"RESOURCE_POOL_EXHAUSTED":                   {},
+	"RESOURCE_AVAILABILITY":                     {},
+}
+
+// stockoutAPIStatusCodes are the HTTP status codes on which a sync
+// capacity rejection is plausible. GCP surfaces capacity shortage as
+// 503 (observed: insufficientCapacity) or 429 (AIP-193 canonical:
+// RESOURCE_EXHAUSTED / RESOURCE_AVAILABILITY). We still require a
+// recognised reason as well, so a non-capacity 429 (quotaExceeded) or
+// 503 (backendError) stays fatal — the status gate only narrows, it
+// never classifies on its own.
+var stockoutAPIStatusCodes = map[int]struct{}{
+	http.StatusServiceUnavailable: {}, // 503
+	http.StatusTooManyRequests:    {}, // 429
+}
+
+// errorInfoTypeURL is the google.rpc.ErrorInfo @type discriminator that
+// a details[] entry carries. We only honour a details[] reason when the
+// entry is an ErrorInfo (or omits @type), so an unrelated detail type
+// that happens to carry a "reason" key cannot trip stockout
+// classification.
+const errorInfoTypeURL = "type.googleapis.com/google.rpc.ErrorInfo"
 
 // createInstanceViaBulkInsert provisions a single VM by looping over
 // the configured flex selections (or a synthetic single-entry list
@@ -91,8 +158,8 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 		if !retryable {
 			return attemptErr
 		}
-		log.Warnf("bulkInsert selection %d (%s) hit stockout-class failure, falling through: %v", i, sel.MachineType, attemptErr)
-		stockoutErrs = append(stockoutErrs, fmt.Errorf("selection %d (machine-type=%s): %w", i, sel.MachineType, attemptErr))
+		log.Warnf("bulkInsert selection %d/%d (%s) hit stockout-class failure, falling through: %v", i+1, len(selections), sel.MachineType, attemptErr)
+		stockoutErrs = append(stockoutErrs, fmt.Errorf("selection %d/%d (machine-type=%s): %w", i+1, len(selections), sel.MachineType, attemptErr))
 	}
 
 	return fmt.Errorf("all %d bulkInsert selections failed with stockout-class errors: %w", len(selections), errors.Join(stockoutErrs...))
@@ -161,20 +228,57 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 		log.Debugf("bulkInsert request: %s", reqDumpBuf)
 	}
 
+	// Reset any zone carried over from a prior (stockout) attempt so a
+	// later failure can't accidentally reuse an earlier attempt's zone.
+	c.placedZone = ""
+
 	op, err := c.service.RegionInstances.BulkInsert(c.project, c.region(), req).Do()
 	if err != nil {
-		// Synchronous API rejections (auth, malformed request, etc.)
-		// are never stockout: fail fast.
-		return false, fmt.Errorf("bulkInsert rejected create for %q in %q: %w", c.instanceName, c.region(), err)
+		wrapped := fmt.Errorf("bulkInsert rejected create for %q in %q: %w", c.instanceName, c.region(), err)
+		// Most synchronous API rejections (auth, malformed request,
+		// quota) are never stockout: fail fast. But GCE also surfaces
+		// a region-wide capacity shortage synchronously as an HTTP 503
+		// with reason insufficientCapacity — that IS a stockout and
+		// must advance to the next selection rather than abort.
+		if isStockoutAPIError(err) {
+			return true, wrapped
+		}
+		return false, wrapped
+	}
+	// Defensive: a malformed/partial response could yield a nil op or
+	// one with no name. Either makes the wait meaningless, so fail fast
+	// with context rather than panic or wait on an empty name.
+	if op == nil || op.Name == "" {
+		return false, fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, c.region())
 	}
 
 	log.Infof("Waiting for bulkInsert operation %s", op.Name)
-	if waitErr := c.waitForRegionOp(op.Name); waitErr != nil {
+	doneOp, waitErr := c.waitForRegionOpResult(op.Name)
+	if waitErr != nil {
+		// The operation failed overall, but it may still have placed the
+		// VM before erroring (a partial-failure / rollback state). If the
+		// operation reports a placement zone, persist it to ResolvedZone
+		// so the subsequent Remove can delete the VM directly instead of
+		// orphaning it or relying on the rate-limited AggregatedList
+		// lookup. Best effort: no zone reported -> leave it to the
+		// existing delete-time recovery.
+		if zone, ok := zoneFromBulkInsertOp(doneOp); ok {
+			d.ResolvedZone = zone
+		}
 		wrapped := fmt.Errorf("bulkInsert for %q did not complete: %w", c.instanceName, waitErr)
 		if isStockoutError(waitErr) {
 			return true, wrapped
 		}
 		return false, wrapped
+	}
+
+	// Record the placed zone from the operation metadata so
+	// finishPostCreate can skip the AggregatedList lookup (which is
+	// rate-limited under stockout load and a known orphan source). Best
+	// effort: if the operation didn't report an unambiguous zone,
+	// placedZone stays empty and finishPostCreate falls back.
+	if zone, ok := zoneFromBulkInsertOp(doneOp); ok {
+		c.placedZone = zone
 	}
 
 	return false, nil
@@ -437,6 +541,139 @@ func isStockoutError(err error) bool {
 	return ok
 }
 
+// isStockoutAPIError reports whether err is a synchronous googleapi
+// rejection that represents a capacity stockout (and so should advance
+// to the next flex selection rather than abort the create).
+//
+// It walks the error chain via errors.As so wrappers added by
+// attemptBulkInsertForSelection don't hide the underlying
+// *googleapi.Error, then requires BOTH a plausible capacity status
+// code (stockoutAPIStatusCodes: 503 or 429) AND a recognised stockout
+// reason (stockoutAPIReasons). Both are required deliberately:
+//   - the status code alone is not sufficient — a 503 can also be a
+//     transient backend error and a 429 can be a quota wall; those
+//     must fail fast, not burn the whole flex ladder;
+//   - the reason alone is not sufficient — keying on reason only would
+//     also match if GCE emitted a capacity-like reason on an unrelated
+//     status (validation/policy), again wrongly burning the ladder.
+//
+// The reason is read from BOTH places GCE can carry it, because the
+// compute v1 sync error decodes them into different fields:
+//   - the legacy apiErr.Errors[].Reason list (typed), and
+//   - the newer apiErr.Details[] google.rpc.ErrorInfo entries, which
+//     the SDK leaves as untyped map[string]interface{} (it does not
+//     decode @type), so we read the "reason" key defensively.
+//
+// Conservative by construction: anything that is not a capacity status
+// with a listed reason is treated as fatal.
+func isStockoutAPIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *googleapi.Error
+	if !errors.As(err, &apiErr) || apiErr == nil {
+		return false
+	}
+	if _, ok := stockoutAPIStatusCodes[apiErr.Code]; !ok {
+		return false
+	}
+	// Legacy errors[].reason list.
+	for _, e := range apiErr.Errors {
+		if _, ok := stockoutAPIReasons[e.Reason]; ok {
+			return true
+		}
+	}
+	// Newer details[] google.rpc.ErrorInfo entries. On the REST
+	// compute/v1 path these are ALWAYS map[string]interface{}: a
+	// *googleapi.Error from RegionInstances.BulkInsert(...).Do() is
+	// produced by googleapi.CheckResponseWithBody → json.Unmarshal into
+	// Error.Details, which is typed []interface{}, so encoding/json
+	// decodes each JSON object as map[string]interface{} — never a typed
+	// errdetails.ErrorInfo (that only appears via the gRPC
+	// apierror.APIError wrapper, which this REST client does not use).
+	// The comma-ok assertion therefore both reads the expected shape and
+	// safely ignores any unexpected one rather than adding dead code for
+	// a representation this call path cannot produce.
+	for _, d := range apiErr.Details {
+		m, ok := d.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		// Only trust the reason on a google.rpc.ErrorInfo entry. When
+		// @type is present it must be the ErrorInfo string; an unrelated
+		// detail type that happens to carry a "reason" key is ignored.
+		// (@type absent is tolerated — older/edge encodings may omit it —
+		// but a present @type that is non-ErrorInfo, or not even a
+		// string, disqualifies the entry. Presence is checked separately
+		// from the string assertion so a present non-string @type is not
+		// mistaken for "absent".)
+		if rawType, present := m["@type"]; present {
+			if t, ok := rawType.(string); !ok || t != errorInfoTypeURL {
+				continue
+			}
+		}
+		reason, ok := m["reason"].(string)
+		if !ok {
+			continue
+		}
+		if _, ok := stockoutAPIReasons[reason]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// zoneFromBulkInsertOp extracts the zone a bulkInsert operation placed
+// the VM in, from op.InstancesBulkInsertOperationMetadata.PerLocationStatus.
+// That map is keyed by location ("zones/<zone>") and each value reports
+// per-zone created/failed counts (verified populated in production on
+// both success and failure paths).
+//
+// Returns the zone of the single location whose CreatedVmCount > 0, and
+// ok=true. Returns ok=false (no usable zone) when:
+//   - the metadata or map is absent (older API behaviour / not a
+//     bulkInsert op), or
+//   - no location created a VM (a failed placement), or
+//   - more than one location reports a created VM — unexpected for our
+//     count=1 request, so we treat it as ambiguous and let the caller
+//     fall back to an authoritative AggregatedList lookup rather than
+//     guess.
+//
+// This is best-effort: a false (ambiguous/absent) result is not an
+// error, it just means "use the fallback".
+func zoneFromBulkInsertOp(op *raw.Operation) (zone string, ok bool) {
+	if op == nil || op.InstancesBulkInsertOperationMetadata == nil {
+		return "", false
+	}
+	found := ""
+	for location, status := range op.InstancesBulkInsertOperationMetadata.PerLocationStatus {
+		if status.CreatedVmCount < 1 {
+			continue
+		}
+		// The location key is documented as "zones/<zone>". Only accept
+		// that exact shape with a zone suffix that matches the GCE zone
+		// name format; anything else (a full self-link, a region key,
+		// whitespace, an unexpected format) is not a zone we can trust,
+		// so we return ok=false and let the caller fall back to the
+		// authoritative AggregatedList lookup rather than build a bad
+		// zone URL from a guessed value.
+		zone, ok := strings.CutPrefix(location, "zones/")
+		if !ok || !gceZoneName.MatchString(zone) {
+			return "", false
+		}
+		if found != "" {
+			// Two locations both claim a created VM: ambiguous for a
+			// single-VM create. Don't guess.
+			return "", false
+		}
+		found = zone
+	}
+	if found == "" {
+		return "", false
+	}
+	return found, true
+}
+
 // discoverInstanceZone finds the zone GCP placed our just-created
 // instance in by name. Uses AggregatedList scoped to the project with
 // a server-side name filter, so the response is bounded to (at most)
@@ -452,6 +689,9 @@ func (c *ComputeUtil) discoverInstanceZone() (string, error) {
 		Do()
 	if err != nil {
 		return "", fmt.Errorf("aggregatedList lookup for %q: %w", c.instanceName, err)
+	}
+	if resp == nil {
+		return "", fmt.Errorf("aggregatedList lookup for %q returned a nil response", c.instanceName)
 	}
 
 	for _, scope := range resp.Items {
@@ -471,14 +711,36 @@ func (c *ComputeUtil) discoverInstanceZone() (string, error) {
 	return "", fmt.Errorf("instance %q not found in any zone after bulkInsert (operation completed but aggregatedList did not return it)", c.instanceName)
 }
 
-// finishPostCreate runs the post-bulkInsert work: discover the zone
-// GCP placed the VM in, set the driver / compute-util zone fields,
-// fetch the instance, record the flex-picked machine type, add the
-// firewall tag, push the SSH key.
-func (c *ComputeUtil) finishPostCreate(d *Driver) error {
+// resolvePlacedZone returns the zone the just-created bulkInsert VM
+// landed in. It prefers the zone the operation already reported
+// (c.placedZone, set in attemptBulkInsertForSelection from the
+// operation metadata) and only falls back to an AggregatedList lookup
+// when that is unavailable.
+//
+// The AggregatedList fallback consumes the per-region "filtered list
+// cost overhead" quota, which collapses under stockout load; when it
+// fails for an already-placed VM the create is reported failed and the
+// VM is left orphaned. Reading the zone from the operation avoids that
+// call on the hot path entirely.
+func (c *ComputeUtil) resolvePlacedZone() (string, error) {
+	if c.placedZone != "" {
+		return c.placedZone, nil
+	}
 	zone, err := c.discoverInstanceZone()
 	if err != nil {
-		return fmt.Errorf("discovering zone for bulkInsert-placed instance %q: %w", c.instanceName, err)
+		return "", fmt.Errorf("discovering zone for bulkInsert-placed instance %q: %w", c.instanceName, err)
+	}
+	return zone, nil
+}
+
+// finishPostCreate runs the post-bulkInsert work: resolve the zone GCP
+// placed the VM in, set the driver / compute-util zone fields, fetch
+// the instance, record the flex-picked machine type, add the firewall
+// tag, push the SSH key.
+func (c *ComputeUtil) finishPostCreate(d *Driver) error {
+	zone, err := c.resolvePlacedZone()
+	if err != nil {
+		return err
 	}
 	c.zone = zone
 	d.ResolvedZone = zone

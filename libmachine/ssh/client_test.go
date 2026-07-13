@@ -5,10 +5,23 @@ import (
 	"io/ioutil"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+// TestBaseSSHArgsKeepalive is a regression guard on the keepalive tuning that is
+// the headline of the SSH transport-resilience fix: a stalled provisioning
+// session must be detected in ~45s (ServerAliveInterval=15 × ServerAliveCountMax=3),
+// not the OpenSSH default ~180s. A future edit that reverts any of these would
+// otherwise ship silently with green tests.
+func TestBaseSSHArgsKeepalive(t *testing.T) {
+	args := strings.Join(baseSSHArgs, " ")
+	for _, want := range []string{"ServerAliveInterval=15", "ServerAliveCountMax=3", "TCPKeepAlive=yes"} {
+		assert.Contains(t, args, want)
+	}
+}
 
 func TestGetSSHCmdArgs(t *testing.T) {
 	cases := []struct {

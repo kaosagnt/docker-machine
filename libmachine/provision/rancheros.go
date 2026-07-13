@@ -164,13 +164,21 @@ func (provisioner *RancherProvisioner) upgrade() error {
 		return provisioner.upgradeIso()
 	default:
 		log.Infof("Running upgrade")
-		if _, err := provisioner.SSHCommand("sudo rancherctl os upgrade -f --no-reboot"); err != nil {
+		// Single-shot (not the retrying SSHCommand): an OS upgrade is not safely
+		// idempotent — if a transport drop occurs mid-command the upgrade may still
+		// be running on the host, and a retry would re-issue it against a partially
+		// upgraded system. Same reasoning as the single-shot `sudo reboot` below.
+		if _, err := drivers.RunSSHCommandFromDriver(provisioner.GetDriver(), "sudo rancherctl os upgrade -f --no-reboot"); err != nil {
 			return err
 		}
 
 		log.Infof("Upgrade succeeded, rebooting")
-		// ignore errors here because the SSH connection will close
-		provisioner.SSHCommand("sudo reboot")
+		// ignore errors here because the SSH connection will close.
+		// Use the single-shot driver call rather than the provisioner's
+		// SSHCommand, which retries on transport errors: `sudo reboot`
+		// severs the session on success (ssh exits 255), and retrying it
+		// would re-issue the reboot against a host that is going down.
+		drivers.RunSSHCommandFromDriver(provisioner.GetDriver(), "sudo reboot")
 
 		return nil
 	}
