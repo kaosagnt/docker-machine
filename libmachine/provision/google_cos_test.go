@@ -2,6 +2,7 @@ package provision
 
 import (
 	"errors"
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -65,6 +66,10 @@ func TestGoogleCOSReadinessMetadataFailure(t *testing.T) {
 
 	require.Error(t, err)
 	assert.False(t, enabled)
+}
+
+func TestDockerNetworkProbeShellSyntax(t *testing.T) {
+	require.NoError(t, exec.Command("sh", "-n", "-c", dockerNetworkCheck).Run())
 }
 
 func TestGoogleCOSCloudInitFailure(t *testing.T) {

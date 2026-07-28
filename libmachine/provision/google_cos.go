@@ -40,7 +40,7 @@ const dockerNetworkVerifierImageCheck = `sudo docker image inspect alpine:latest
 
 const (
 	dockerNetworkProbeContainer = "gitlab-docker-network-readiness-probe"
-	dockerNetworkCheck          = `sudo sh -c 'docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true; timeout 10 docker run --name ` + dockerNetworkProbeContainer + ` --rm --pull=never --network bridge alpine:latest wget -qO- -T 3 --header='Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/id >/dev/null; rc=$?; docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true; exit $rc'`
+	dockerNetworkCheck          = `sudo sh -c 'docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true; timeout 10 docker run --name ` + dockerNetworkProbeContainer + ` --rm --pull=never --network bridge alpine:latest wget -qO- -T 3 --header="Metadata-Flavor: Google" http://169.254.169.254/computeMetadata/v1/instance/id >/dev/null; rc=$?; docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true; exit $rc'`
 )
 
 const dockerNetworkDiagnosticsCmd = `sudo sh -c 'echo "docker-network-readiness: container bridge egress unavailable"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; docker network inspect bridge; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`
@@ -93,8 +93,7 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 
 	readinessEnabled, err := p.readinessEnabled()
 	if err != nil {
-		log.Warnf("Could not determine whether the Google COS readiness gate is enabled; continuing with the gate disabled: %v", err)
-		readinessEnabled = false
+		return fmt.Errorf("determining whether the Google COS readiness gate is enabled: %w", err)
 	}
 	if readinessEnabled {
 		log.Info("Waiting for cloud-init to finish before provisioning Docker")
