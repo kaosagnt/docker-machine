@@ -38,6 +38,8 @@ const readinessMetadataCheck = `for i in 1 2 3; do code=$(curl -s --max-time 3 -
 
 const dockerNetworkRulesCheck = `sudo sh -c 'docker network inspect bridge >/dev/null && iptables -t nat -C POSTROUTING -s $(docker network inspect bridge --format "{{(index .IPAM.Config 0).Subnet}}") ! -o docker0 -j MASQUERADE && iptables -C FORWARD -o docker0 -j DOCKER && iptables -C FORWARD -o docker0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT && iptables -C FORWARD -i docker0 ! -o docker0 -j ACCEPT && iptables -C FORWARD -i docker0 -o docker0 -j ACCEPT'`
 
+const dockerNetworkDiagnosticsCmd = `sudo sh -c 'echo "docker-network-readiness: Docker bridge rules missing"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`
+
 func (p *GoogleCOSProvisioner) String() string {
 	return "cos"
 }
@@ -90,7 +92,11 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 	}
 	if readinessEnabled {
 		log.Info("Waiting for cloud-init to finish before provisioning Docker")
-		if _, err := p.SSHCommand("sudo timeout 5m cloud-init status --wait --long"); err != nil {
+		out, err := p.SSHCommand("sudo timeout 5m cloud-init status --wait --long")
+		if out != "" {
+			log.Debugf("cloud-init status output:\n%s", out)
+		}
+		if err != nil {
 			return fmt.Errorf("waiting for cloud-init readiness gate: %w", err)
 		}
 	}
@@ -161,7 +167,7 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval ti
 		return nil
 	}
 
-	out, diagErr := p.SSHCommand(`sudo sh -c 'echo "docker-network-readiness: Docker bridge rules missing"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`)
+	out, diagErr := p.SSHCommand(dockerNetworkDiagnosticsCmd)
 	if out != "" {
 		log.Warnf("Docker bridge network diagnostics before repair:\n%s", out)
 	}
@@ -194,7 +200,10 @@ func (p *GoogleCOSProvisioner) waitForDockerNetworkRules(interval time.Duration)
 }
 
 func (p *GoogleCOSProvisioner) stopDocker() {
-	_, _ = p.SSHCommand("sudo systemctl stop docker.service docker.socket")
+	log.Warn("Stopping Docker as part of bridge network readiness fail-closed cleanup")
+	if _, err := p.SSHCommand("sudo systemctl stop docker.service docker.socket"); err != nil {
+		log.Warnf("Failed to stop Docker during cleanup: %v", err)
+	}
 }
 
 func (p *GoogleCOSProvisioner) dockerDaemonResponding() bool {

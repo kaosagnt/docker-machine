@@ -70,8 +70,8 @@ func TestVerifyDockerBridgeNetworkHealthy(t *testing.T) {
 func TestVerifyDockerBridgeNetworkRepairsOnce(t *testing.T) {
 	missing := make([]scriptedSSHResponse, 5)
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		dockerNetworkRulesCheck: appendMissingThenSuccess(missing),
-		`sudo sh -c 'echo "docker-network-readiness: Docker bridge rules missing"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`: {{}},
+		dockerNetworkRulesCheck:            appendMissingThenSuccess(missing),
+		dockerNetworkDiagnosticsCmd:        {{}},
 		"sudo systemctl daemon-reload":     {{}},
 		"sudo systemctl -f restart docker": {{}},
 		"sudo docker version":              {{}},
@@ -90,8 +90,8 @@ func TestVerifyDockerBridgeNetworkFailsClosed(t *testing.T) {
 		missing[i].err = errors.New("rules missing")
 	}
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		dockerNetworkRulesCheck: missing,
-		`sudo sh -c 'echo "docker-network-readiness: Docker bridge rules missing"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`: {{}},
+		dockerNetworkRulesCheck:                            missing,
+		dockerNetworkDiagnosticsCmd:                        {{}},
 		"sudo systemctl daemon-reload":                     {{}},
 		"sudo systemctl -f restart docker":                 {{}},
 		"sudo docker version":                              {{}},
