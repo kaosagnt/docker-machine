@@ -36,9 +36,9 @@ type GoogleCOSProvisioner struct {
 
 const readinessMetadataCheck = `for i in 1 2 3; do code=$(curl -s --max-time 3 -o /tmp/gitlab-readiness-gate -w '%{http_code}' -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/attributes/gitlab-docker-network-readiness-gate) && { [ "$code" = 404 ] && exit 0; [ "$code" = 200 ] && cat /tmp/gitlab-readiness-gate && exit 0; }; sleep 1; done; echo 'GCE readiness metadata unavailable after 3 attempts' >&2; exit 1`
 
-const dockerNetworkRulesCheck = `sudo sh -c 'docker network inspect bridge >/dev/null && iptables -t nat -C POSTROUTING -s $(docker network inspect bridge --format "{{(index .IPAM.Config 0).Subnet}}") ! -o docker0 -j MASQUERADE && iptables -C FORWARD -o docker0 -j DOCKER && iptables -C FORWARD -o docker0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT && iptables -C FORWARD -i docker0 ! -o docker0 -j ACCEPT && iptables -C FORWARD -i docker0 -o docker0 -j ACCEPT'`
+const dockerNetworkCheck = `sudo timeout 10 docker run --rm --pull=never --network bridge alpine:latest wget -qO- -T 3 --header='Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/id >/dev/null`
 
-const dockerNetworkDiagnosticsCmd = `sudo sh -c 'echo "docker-network-readiness: Docker bridge rules missing"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`
+const dockerNetworkDiagnosticsCmd = `sudo sh -c 'echo "docker-network-readiness: container bridge egress unavailable"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; docker network inspect bridge; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`
 
 func (p *GoogleCOSProvisioner) String() string {
 	return "cos"
@@ -163,7 +163,7 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetwork() error {
 }
 
 func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval time.Duration) error {
-	if p.waitForDockerNetworkRules(interval) {
+	if p.waitForDockerNetwork(interval) {
 		return nil
 	}
 
@@ -184,7 +184,7 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval ti
 		p.stopDocker()
 		return fmt.Errorf("waiting for Docker after bridge network repair restart: %w", err)
 	}
-	if !p.waitForDockerNetworkRules(interval) {
+	if !p.waitForDockerNetwork(interval) {
 		p.stopDocker()
 		return errors.New("Docker bridge network remained unavailable after one restart")
 	}
@@ -192,9 +192,9 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval ti
 	return nil
 }
 
-func (p *GoogleCOSProvisioner) waitForDockerNetworkRules(interval time.Duration) bool {
+func (p *GoogleCOSProvisioner) waitForDockerNetwork(interval time.Duration) bool {
 	return mcnutils.WaitForSpecific(func() bool {
-		_, err := p.SSHCommand(dockerNetworkRulesCheck)
+		_, err := p.SSHCommand(dockerNetworkCheck)
 		return err == nil
 	}, 5, interval) == nil
 }

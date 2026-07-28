@@ -58,19 +58,19 @@ func TestGoogleCOSReadinessDisabled(t *testing.T) {
 
 func TestVerifyDockerBridgeNetworkHealthy(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		dockerNetworkRulesCheck: {{}},
+		dockerNetworkCheck: {{}},
 	}}
 
 	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{dockerNetworkRulesCheck}, commander.calls)
+	assert.Equal(t, []string{dockerNetworkCheck}, commander.calls)
 }
 
 func TestVerifyDockerBridgeNetworkRepairsOnce(t *testing.T) {
 	missing := make([]scriptedSSHResponse, 5)
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		dockerNetworkRulesCheck:            appendMissingThenSuccess(missing),
+		dockerNetworkCheck:                 appendMissingThenSuccess(missing),
 		dockerNetworkDiagnosticsCmd:        {{}},
 		"sudo systemctl daemon-reload":     {{}},
 		"sudo systemctl -f restart docker": {{}},
@@ -80,7 +80,7 @@ func TestVerifyDockerBridgeNetworkRepairsOnce(t *testing.T) {
 	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
 
 	require.NoError(t, err)
-	assert.Equal(t, 6, countCalls(commander.calls, dockerNetworkRulesCheck))
+	assert.Equal(t, 6, countCalls(commander.calls, dockerNetworkCheck))
 	assert.Equal(t, 1, countCalls(commander.calls, "sudo systemctl -f restart docker"))
 }
 
@@ -90,7 +90,7 @@ func TestVerifyDockerBridgeNetworkFailsClosed(t *testing.T) {
 		missing[i].err = errors.New("rules missing")
 	}
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		dockerNetworkRulesCheck:                            missing,
+		dockerNetworkCheck:                                 missing,
 		dockerNetworkDiagnosticsCmd:                        {{}},
 		"sudo systemctl daemon-reload":                     {{}},
 		"sudo systemctl -f restart docker":                 {{}},
