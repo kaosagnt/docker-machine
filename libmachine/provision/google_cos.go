@@ -34,16 +34,59 @@ type GoogleCOSProvisioner struct {
 	SystemdProvisioner
 }
 
-const readinessMetadataCheck = `for i in 1 2 3; do code=$(curl -s --max-time 3 -o /tmp/gitlab-readiness-gate -w '%{http_code}' -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/attributes/gitlab-docker-network-readiness-gate) && { [ "$code" = 404 ] && exit 0; [ "$code" = 200 ] && cat /tmp/gitlab-readiness-gate && exit 0; }; sleep 1; done; echo 'GCE readiness metadata unavailable after 3 attempts' >&2; exit 1`
+// readinessMetadataCheck prints the opt-in metadata value on HTTP 200, prints
+// nothing on 404, and fails after bounded retries for every other outcome.
+const readinessMetadataCheck = `
+url=http://metadata.google.internal/computeMetadata/v1/instance/attributes/gitlab-docker-network-readiness-gate
+for attempt in 1 2 3; do
+	code=$(curl -s --max-time 3 -o /tmp/gitlab-readiness-gate -w '%{http_code}' -H 'Metadata-Flavor: Google' "$url") || {
+		sleep 1
+		continue
+	}
+	case "$code" in
+		404) exit 0 ;;
+		200) cat /tmp/gitlab-readiness-gate; exit 0 ;;
+	esac
+	sleep 1
+done
+echo 'GCE readiness metadata unavailable after 3 attempts' >&2
+exit 1`
 
 const dockerNetworkVerifierImageCheck = `sudo docker image inspect alpine:latest >/dev/null`
 
 const (
 	dockerNetworkProbeContainer = "gitlab-docker-network-readiness-probe"
-	dockerNetworkCheck          = `sudo sh -c 'docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true; timeout 10 docker run --name ` + dockerNetworkProbeContainer + ` --rm --pull=never --network bridge alpine:latest wget -qO- -T 3 --header="Metadata-Flavor: Google" http://169.254.169.254/computeMetadata/v1/instance/id >/dev/null; rc=$?; docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true; exit $rc'`
+	// dockerNetworkCheck uses a preloaded image and link-local endpoint so the
+	// readiness decision does not depend on DNS, a registry, or public egress.
+	dockerNetworkCheck = `sudo sh -c '
+docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true
+timeout 10 docker run \
+	--name ` + dockerNetworkProbeContainer + ` \
+	--rm \
+	--pull=never \
+	--network bridge \
+	alpine:latest \
+	wget -qO- -T 3 \
+		--header="Metadata-Flavor: Google" \
+		http://169.254.169.254/computeMetadata/v1/instance/id \
+		>/dev/null
+rc=$?
+docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true
+exit $rc
+'`
 )
 
-const dockerNetworkDiagnosticsCmd = `sudo sh -c 'echo "docker-network-readiness: container bridge egress unavailable"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; docker network inspect bridge; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`
+// dockerNetworkDiagnosticsCmd is best-effort evidence collected before the
+// single repair restart. It intentionally continues when an individual probe
+// fails so the provisioning log contains as much state as possible.
+const dockerNetworkDiagnosticsCmd = `sudo sh -c '
+echo "docker-network-readiness: container bridge egress unavailable"
+systemctl show docker.service iptables-restore.service gpu-driver.service \
+	-p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp
+docker network inspect bridge
+iptables -t nat -S POSTROUTING
+iptables -S FORWARD
+'`
 
 func (p *GoogleCOSProvisioner) String() string {
 	return "cos"

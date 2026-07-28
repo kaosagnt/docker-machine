@@ -72,6 +72,14 @@ func TestDockerNetworkProbeShellSyntax(t *testing.T) {
 	require.NoError(t, exec.Command("sh", "-n", "-c", dockerNetworkCheck).Run())
 }
 
+func TestReadinessMetadataCheckShellSyntax(t *testing.T) {
+	require.NoError(t, exec.Command("sh", "-n", "-c", readinessMetadataCheck).Run())
+}
+
+func TestDockerNetworkDiagnosticsShellSyntax(t *testing.T) {
+	require.NoError(t, exec.Command("sh", "-n", "-c", dockerNetworkDiagnosticsCmd).Run())
+}
+
 func TestGoogleCOSCloudInitFailure(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
 		"sudo timeout 5m cloud-init status --wait --long": {{
