@@ -161,11 +161,12 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval ti
 		return nil
 	}
 
-	if out, err := p.SSHCommand(`sudo sh -c 'echo "docker-network-readiness: Docker bridge rules missing"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`); out != "" {
+	out, diagErr := p.SSHCommand(`sudo sh -c 'echo "docker-network-readiness: Docker bridge rules missing"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`)
+	if out != "" {
 		log.Warnf("Docker bridge network diagnostics before repair:\n%s", out)
-		if err != nil {
-			log.Warnf("Collecting Docker bridge network diagnostics returned: %v", err)
-		}
+	}
+	if diagErr != nil {
+		log.Warnf("Collecting Docker bridge network diagnostics returned: %v", diagErr)
 	}
 
 	log.Warn("Docker bridge network readiness check failed; restarting Docker once")
