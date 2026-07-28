@@ -2,8 +2,11 @@ package provision
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"strings"
 	"text/template"
+	"time"
 
 	"github.com/docker/machine/libmachine/auth"
 	"github.com/docker/machine/libmachine/drivers"
@@ -30,6 +33,10 @@ func NewGoogleCOSProvisioner(d drivers.Driver) Provisioner {
 type GoogleCOSProvisioner struct {
 	SystemdProvisioner
 }
+
+const readinessMetadataCheck = `for i in 1 2 3; do code=$(curl -s --max-time 3 -o /tmp/gitlab-readiness-gate -w '%{http_code}' -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/attributes/gitlab-docker-network-readiness-gate) && { [ "$code" = 404 ] && exit 0; [ "$code" = 200 ] && cat /tmp/gitlab-readiness-gate && exit 0; }; sleep 1; done; echo 'GCE readiness metadata unavailable after 3 attempts' >&2; exit 1`
+
+const dockerNetworkRulesCheck = `sudo sh -c 'docker network inspect bridge >/dev/null && iptables -t nat -C POSTROUTING -s $(docker network inspect bridge --format "{{(index .IPAM.Config 0).Subnet}}") ! -o docker0 -j MASQUERADE && iptables -C FORWARD -o docker0 -j DOCKER && iptables -C FORWARD -o docker0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT && iptables -C FORWARD -i docker0 ! -o docker0 -j ACCEPT && iptables -C FORWARD -i docker0 -o docker0 -j ACCEPT'`
 
 func (p *GoogleCOSProvisioner) String() string {
 	return "cos"
@@ -77,8 +84,19 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 	p.EngineOptions = engineOptions
 	swarmOptions.Env = engineOptions.Env
 
+	readinessEnabled, err := p.readinessEnabled()
+	if err != nil {
+		return err
+	}
+	if readinessEnabled {
+		log.Info("Waiting for cloud-init to finish before provisioning Docker")
+		if _, err := p.SSHCommand("sudo timeout 5m cloud-init status --wait --long"); err != nil {
+			return fmt.Errorf("waiting for cloud-init readiness gate: %w", err)
+		}
+	}
+
 	log.Debug("Setting hostname")
-	err := p.SetHostname(p.Driver.GetMachineName())
+	err = p.SetHostname(p.Driver.GetMachineName())
 	if err != nil {
 		return err
 	}
@@ -112,7 +130,66 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 	}
 
 	log.Debug("Enabling Docker in systemd")
-	return p.Service("docker", serviceaction.Enable)
+	if err := p.Service("docker", serviceaction.Enable); err != nil {
+		return err
+	}
+
+	if readinessEnabled {
+		if err := p.verifyDockerBridgeNetwork(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (p *GoogleCOSProvisioner) readinessEnabled() (bool, error) {
+	out, err := p.SSHCommand(readinessMetadataCheck)
+	if err != nil {
+		return false, fmt.Errorf("checking Google COS readiness metadata: %w", err)
+	}
+
+	return strings.TrimSpace(out) == "true", nil
+}
+
+func (p *GoogleCOSProvisioner) verifyDockerBridgeNetwork() error {
+	if p.waitForDockerNetworkRules() {
+		return nil
+	}
+
+	if out, err := p.SSHCommand(`sudo sh -c 'echo "docker-network-readiness: Docker bridge rules missing"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`); out != "" {
+		log.Warnf("Docker bridge network diagnostics before repair:\n%s", out)
+		if err != nil {
+			log.Warnf("Collecting Docker bridge network diagnostics returned: %v", err)
+		}
+	}
+
+	log.Warn("Docker bridge network readiness check failed; restarting Docker once")
+	if err := p.Service("docker", serviceaction.Restart); err != nil {
+		p.stopDocker()
+		return fmt.Errorf("restarting Docker after bridge network readiness failure: %w", err)
+	}
+	if err := mcnutils.WaitFor(p.dockerDaemonResponding); err != nil {
+		p.stopDocker()
+		return fmt.Errorf("waiting for Docker after bridge network repair restart: %w", err)
+	}
+	if !p.waitForDockerNetworkRules() {
+		p.stopDocker()
+		return errors.New("Docker bridge network remained unavailable after one restart")
+	}
+
+	return nil
+}
+
+func (p *GoogleCOSProvisioner) waitForDockerNetworkRules() bool {
+	return mcnutils.WaitForSpecific(func() bool {
+		_, err := p.SSHCommand(dockerNetworkRulesCheck)
+		return err == nil
+	}, 5, time.Second) == nil
+}
+
+func (p *GoogleCOSProvisioner) stopDocker() {
+	_, _ = p.SSHCommand("sudo systemctl stop docker.service docker.socket")
 }
 
 func (p *GoogleCOSProvisioner) dockerDaemonResponding() bool {
