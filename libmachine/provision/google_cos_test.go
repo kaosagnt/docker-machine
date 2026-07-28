@@ -103,7 +103,7 @@ func TestVerifyDockerBridgeNetworkRequiresPreloadedImage(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "verifier image alpine:latest is not present")
-	assert.Equal(t, 0, countCalls(commander.calls, "sudo systemctl -f restart docker"))
+	assert.Equal(t, []string{dockerNetworkVerifierImageCheck}, commander.calls)
 }
 
 func TestDockerNetworkProbeCleansUpNamedContainer(t *testing.T) {
@@ -143,7 +143,7 @@ func TestVerifyDockerBridgeNetworkRepairsOnce(t *testing.T) {
 }
 
 func TestVerifyDockerBridgeNetworkFailsClosed(t *testing.T) {
-	missing := make([]scriptedSSHResponse, 10)
+	missing := make([]scriptedSSHResponse, 15)
 	for i := range missing {
 		missing[i].err = errors.New("rules missing")
 	}

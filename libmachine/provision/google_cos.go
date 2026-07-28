@@ -46,6 +46,7 @@ for attempt in 1 2 3; do
 	case "$code" in
 		404) exit 0 ;;
 		200) cat /tmp/gitlab-readiness-gate; exit 0 ;;
+		403) echo 'GCE readiness metadata request was forbidden (HTTP 403)' >&2; exit 1 ;;
 	esac
 	sleep 1
 done
@@ -223,7 +224,7 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval ti
 		return fmt.Errorf("Docker network verifier image alpine:latest is not present; refusing to run a registry-dependent readiness check: %w", err)
 	}
 
-	if p.waitForDockerNetwork(interval) {
+	if p.waitForDockerNetwork(5, interval) {
 		return nil
 	}
 
@@ -244,7 +245,7 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval ti
 		p.stopDocker()
 		return fmt.Errorf("waiting for Docker after bridge network repair restart: %w", err)
 	}
-	if !p.waitForDockerNetwork(interval) {
+	if !p.waitForDockerNetwork(10, interval) {
 		p.stopDocker()
 		return errors.New("Docker bridge network remained unavailable after one restart")
 	}
@@ -253,11 +254,11 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval ti
 	return nil
 }
 
-func (p *GoogleCOSProvisioner) waitForDockerNetwork(interval time.Duration) bool {
+func (p *GoogleCOSProvisioner) waitForDockerNetwork(attempts int, interval time.Duration) bool {
 	return mcnutils.WaitForSpecific(func() bool {
 		_, err := p.SSHCommand(dockerNetworkCheck)
 		return err == nil
-	}, 5, interval) == nil
+	}, attempts, interval) == nil
 }
 
 func (p *GoogleCOSProvisioner) stopDocker() {
