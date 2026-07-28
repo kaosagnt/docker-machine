@@ -37,7 +37,7 @@ type GoogleCOSProvisioner struct {
 // readinessMetadataCheck prints the opt-in metadata value on HTTP 200, prints
 // nothing on 404, and fails after bounded retries for every other outcome.
 const readinessMetadataCheck = `
-url=http://metadata.google.internal/computeMetadata/v1/instance/attributes/gitlab-docker-network-readiness-gate
+url=http://169.254.169.254/computeMetadata/v1/instance/attributes/gitlab-docker-network-readiness-gate
 for attempt in 1 2 3; do
 	code=$(curl -s --max-time 3 -o /tmp/gitlab-readiness-gate -w '%{http_code}' -H 'Metadata-Flavor: Google' "$url") || {
 		sleep 1
