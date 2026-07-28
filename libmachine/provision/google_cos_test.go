@@ -61,7 +61,7 @@ func TestVerifyDockerBridgeNetworkHealthy(t *testing.T) {
 		dockerNetworkRulesCheck: {{}},
 	}}
 
-	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetwork()
+	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{dockerNetworkRulesCheck}, commander.calls)
@@ -77,7 +77,7 @@ func TestVerifyDockerBridgeNetworkRepairsOnce(t *testing.T) {
 		"sudo docker version":              {{}},
 	}}
 
-	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetwork()
+	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
 
 	require.NoError(t, err)
 	assert.Equal(t, 6, countCalls(commander.calls, dockerNetworkRulesCheck))
@@ -98,7 +98,7 @@ func TestVerifyDockerBridgeNetworkFailsClosed(t *testing.T) {
 		"sudo systemctl stop docker.service docker.socket": {{}},
 	}}
 
-	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetwork()
+	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "remained unavailable")

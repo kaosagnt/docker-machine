@@ -153,7 +153,11 @@ func (p *GoogleCOSProvisioner) readinessEnabled() (bool, error) {
 }
 
 func (p *GoogleCOSProvisioner) verifyDockerBridgeNetwork() error {
-	if p.waitForDockerNetworkRules() {
+	return p.verifyDockerBridgeNetworkWithInterval(time.Second)
+}
+
+func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval time.Duration) error {
+	if p.waitForDockerNetworkRules(interval) {
 		return nil
 	}
 
@@ -173,7 +177,7 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetwork() error {
 		p.stopDocker()
 		return fmt.Errorf("waiting for Docker after bridge network repair restart: %w", err)
 	}
-	if !p.waitForDockerNetworkRules() {
+	if !p.waitForDockerNetworkRules(interval) {
 		p.stopDocker()
 		return errors.New("Docker bridge network remained unavailable after one restart")
 	}
@@ -181,11 +185,11 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetwork() error {
 	return nil
 }
 
-func (p *GoogleCOSProvisioner) waitForDockerNetworkRules() bool {
+func (p *GoogleCOSProvisioner) waitForDockerNetworkRules(interval time.Duration) bool {
 	return mcnutils.WaitForSpecific(func() bool {
 		_, err := p.SSHCommand(dockerNetworkRulesCheck)
 		return err == nil
-	}, 5, time.Second) == nil
+	}, 5, interval) == nil
 }
 
 func (p *GoogleCOSProvisioner) stopDocker() {
