@@ -56,20 +56,65 @@ func TestGoogleCOSReadinessDisabled(t *testing.T) {
 	assert.False(t, enabled)
 }
 
+func TestGoogleCOSReadinessMetadataFailure(t *testing.T) {
+	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
+		readinessMetadataCheck: {{err: errors.New("metadata unavailable")}},
+	}}
+
+	enabled, err := newGoogleCOSProvisionerForTest(commander).readinessEnabled()
+
+	require.Error(t, err)
+	assert.False(t, enabled)
+}
+
+func TestGoogleCOSCloudInitFailure(t *testing.T) {
+	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
+		"sudo timeout 5m cloud-init status --wait --long": {{
+			out: "status: error\ndetail: gpu-driver.service failed\n",
+			err: errors.New("exit status 1"),
+		}},
+	}}
+
+	err := newGoogleCOSProvisionerForTest(commander).waitForCloudInit()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "waiting for cloud-init readiness gate")
+}
+
+func TestVerifyDockerBridgeNetworkRequiresPreloadedImage(t *testing.T) {
+	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
+		dockerNetworkVerifierImageCheck: {{err: errors.New("No such image")}},
+	}}
+
+	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "verifier image alpine:latest is not present")
+	assert.Equal(t, 0, countCalls(commander.calls, "sudo systemctl -f restart docker"))
+}
+
+func TestDockerNetworkProbeCleansUpNamedContainer(t *testing.T) {
+	assert.Contains(t, dockerNetworkCheck, "--name "+dockerNetworkProbeContainer)
+	assert.Contains(t, dockerNetworkCheck, "docker rm -f "+dockerNetworkProbeContainer)
+	assert.Contains(t, dockerNetworkCheck, "--pull=never")
+}
+
 func TestVerifyDockerBridgeNetworkHealthy(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		dockerNetworkCheck: {{}},
+		dockerNetworkVerifierImageCheck: {{}},
+		dockerNetworkCheck:              {{}},
 	}}
 
 	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{dockerNetworkCheck}, commander.calls)
+	assert.Equal(t, []string{dockerNetworkVerifierImageCheck, dockerNetworkCheck}, commander.calls)
 }
 
 func TestVerifyDockerBridgeNetworkRepairsOnce(t *testing.T) {
 	missing := make([]scriptedSSHResponse, 5)
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
+		dockerNetworkVerifierImageCheck:    {{}},
 		dockerNetworkCheck:                 appendMissingThenSuccess(missing),
 		dockerNetworkDiagnosticsCmd:        {{}},
 		"sudo systemctl daemon-reload":     {{}},
@@ -90,6 +135,7 @@ func TestVerifyDockerBridgeNetworkFailsClosed(t *testing.T) {
 		missing[i].err = errors.New("rules missing")
 	}
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
+		dockerNetworkVerifierImageCheck:                    {{}},
 		dockerNetworkCheck:                                 missing,
 		dockerNetworkDiagnosticsCmd:                        {{}},
 		"sudo systemctl daemon-reload":                     {{}},

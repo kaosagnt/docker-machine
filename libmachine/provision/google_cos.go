@@ -36,7 +36,12 @@ type GoogleCOSProvisioner struct {
 
 const readinessMetadataCheck = `for i in 1 2 3; do code=$(curl -s --max-time 3 -o /tmp/gitlab-readiness-gate -w '%{http_code}' -H 'Metadata-Flavor: Google' http://metadata.google.internal/computeMetadata/v1/instance/attributes/gitlab-docker-network-readiness-gate) && { [ "$code" = 404 ] && exit 0; [ "$code" = 200 ] && cat /tmp/gitlab-readiness-gate && exit 0; }; sleep 1; done; echo 'GCE readiness metadata unavailable after 3 attempts' >&2; exit 1`
 
-const dockerNetworkCheck = `sudo timeout 10 docker run --rm --pull=never --network bridge alpine:latest wget -qO- -T 3 --header='Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/id >/dev/null`
+const dockerNetworkVerifierImageCheck = `sudo docker image inspect alpine:latest >/dev/null`
+
+const (
+	dockerNetworkProbeContainer = "gitlab-docker-network-readiness-probe"
+	dockerNetworkCheck          = `sudo sh -c 'docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true; timeout 10 docker run --name ` + dockerNetworkProbeContainer + ` --rm --pull=never --network bridge alpine:latest wget -qO- -T 3 --header='Metadata-Flavor: Google' http://169.254.169.254/computeMetadata/v1/instance/id >/dev/null; rc=$?; docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true; exit $rc'`
+)
 
 const dockerNetworkDiagnosticsCmd = `sudo sh -c 'echo "docker-network-readiness: container bridge egress unavailable"; systemctl show docker.service iptables-restore.service gpu-driver.service -p Id -p ActiveEnterTimestamp -p ExecMainStartTimestamp; docker network inspect bridge; iptables -t nat -S POSTROUTING; iptables -S FORWARD'`
 
@@ -88,16 +93,13 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 
 	readinessEnabled, err := p.readinessEnabled()
 	if err != nil {
-		return err
+		log.Warnf("Could not determine whether the Google COS readiness gate is enabled; continuing with the gate disabled: %v", err)
+		readinessEnabled = false
 	}
 	if readinessEnabled {
 		log.Info("Waiting for cloud-init to finish before provisioning Docker")
-		out, err := p.SSHCommand("sudo timeout 5m cloud-init status --wait --long")
-		if out != "" {
-			log.Debugf("cloud-init status output:\n%s", out)
-		}
-		if err != nil {
-			return fmt.Errorf("waiting for cloud-init readiness gate: %w", err)
+		if err := p.waitForCloudInit(); err != nil {
+			return err
 		}
 	}
 
@@ -158,11 +160,27 @@ func (p *GoogleCOSProvisioner) readinessEnabled() (bool, error) {
 	return strings.TrimSpace(out) == "true", nil
 }
 
+func (p *GoogleCOSProvisioner) waitForCloudInit() error {
+	out, err := p.SSHCommand("sudo timeout 5m cloud-init status --wait --long")
+	if out != "" {
+		log.Debugf("cloud-init status output:\n%s", out)
+	}
+	if err != nil {
+		return fmt.Errorf("waiting for cloud-init readiness gate: %w", err)
+	}
+
+	return nil
+}
+
 func (p *GoogleCOSProvisioner) verifyDockerBridgeNetwork() error {
 	return p.verifyDockerBridgeNetworkWithInterval(time.Second)
 }
 
 func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval time.Duration) error {
+	if _, err := p.SSHCommand(dockerNetworkVerifierImageCheck); err != nil {
+		return fmt.Errorf("Docker network verifier image alpine:latest is not present; refusing to run a registry-dependent readiness check: %w", err)
+	}
+
 	if p.waitForDockerNetwork(interval) {
 		return nil
 	}
@@ -188,6 +206,7 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval ti
 		p.stopDocker()
 		return errors.New("Docker bridge network remained unavailable after one restart")
 	}
+	log.Info("Docker bridge network recovered after one repair restart")
 
 	return nil
 }
