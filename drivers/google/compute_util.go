@@ -878,6 +878,10 @@ func (c *ComputeUtil) waitForGlobalOp(name string) error {
 
 // ip retrieves and returns the external IP address of the instance.
 func (c *ComputeUtil) ip() (string, error) {
+	if err := c.ensureZone("get the IP of"); err != nil {
+		return "", unwrapGoogleError(err)
+	}
+
 	instance, err := c.service.Instances.Get(c.project, c.zone, c.instanceName).Do()
 	if err != nil {
 		return "", unwrapGoogleError(err)

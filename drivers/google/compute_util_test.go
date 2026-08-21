@@ -705,6 +705,14 @@ func zoneRecoveryOperations() map[string]zoneRecoveryOperation {
 			wantMethod: http.MethodGet,
 			wantPath:   "/projects/p/zones/us-east1-c/instances/runner-abc",
 		},
+		"ip": {
+			run: func(c *ComputeUtil) error {
+				_, err := c.ip()
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/projects/p/zones/us-east1-c/instances/runner-abc",
+		},
 	}
 }
 
@@ -736,7 +744,15 @@ func TestZoneRecovery_StopStartInspectTargetRecoveredZone(t *testing.T) {
 					return
 				}
 				if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/instances/runner-abc") {
-					body, _ := googleapi.WithoutDataWrapper.JSONReader(raw.Instance{Name: "runner-abc"})
+					body, _ := googleapi.WithoutDataWrapper.JSONReader(raw.Instance{
+						Name: "runner-abc",
+						NetworkInterfaces: []*raw.NetworkInterface{
+							{
+								NetworkIP:     "10.0.0.2",
+								AccessConfigs: []*raw.AccessConfig{{NatIP: "203.0.113.7"}},
+							},
+						},
+					})
 					fmt.Fprint(w, body)
 					return
 				}
