@@ -672,7 +672,14 @@ func (c *ComputeUtil) ensureZone(operation string) error {
 	log.Warnf("Zone unresolved for %q after a failed bulkInsert; attempting AggregatedList lookup to recover.", c.instanceName)
 	zone, err := c.discoverInstanceZone()
 	if err != nil {
-		log.Warnf("AggregatedList lookup for %q did not find a placed instance (%v); treating as not-found.", c.instanceName, err)
+		// Only a successful lookup that found nothing means the instance is
+		// absent. A failed lookup (403, 5xx, transport) must not: treating
+		// it as not-found would let callers reap local state while the VM
+		// may still be running.
+		if !errors.Is(err, errInstanceNotPlaced) {
+			return fmt.Errorf("resolving zone to %s instance %q: %w", operation, c.instanceName, err)
+		}
+		log.Warnf("AggregatedList found no placed instance for %q; treating as not-found.", c.instanceName)
 		return &googleapi.Error{
 			Code:    http.StatusNotFound,
 			Message: fmt.Sprintf("instance %q has no resolved zone and was not found by AggregatedList; nothing to %s", c.instanceName, operation),
