@@ -652,14 +652,11 @@ func parseLabels(d *Driver) map[string]string {
 	return labels
 }
 
-// ensureZone recovers from the empty-zone state that bulkInsert can
-// leave behind when create fails after placement (e.g.
-// VM_MIN_COUNT_NOT_REACHED): without recovery, every subsequent
-// zone-scoped API call fails with an empty-zone 400 indefinitely.
-// Direct mode treats empty zone as a programming bug worth surfacing,
-// not a race to recover from. When the instance was never placed,
-// ensureZone returns a not-found googleapi error so callers can treat
-// the machine as gone and reap local state.
+// ensureZone recovers the zone a failed bulkInsert create never
+// recorded. Without it every zone-scoped API call fails with an
+// empty-zone 400. Direct mode treats an empty zone as a bug worth
+// surfacing. A never-placed instance yields a not-found error so
+// callers can reap local state.
 func (c *ComputeUtil) ensureZone(operation string) error {
 	if c.zone != "" {
 		return nil
