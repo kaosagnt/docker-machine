@@ -52,6 +52,10 @@ type ComputeUtil struct {
 	// distinguishes the field from the region() method.
 	regionExplicit string
 
+	// setResolvedZone writes a recovered zone back to the driver, so later
+	// ComputeUtil constructions in the same invocation skip rediscovery.
+	setResolvedZone func(string)
+
 	// bulkInsert policy inputs (empty in direct mode).
 	flexSelections []string
 	locationZones  []string
@@ -142,6 +146,7 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		flexSelections:          driver.FlexSelections,
 		locationZones:           driver.LocationZones,
 		bulkInsert:              driver.BulkInsert,
+		setResolvedZone:         func(z string) { driver.ResolvedZone = z },
 	}, nil
 }
 
@@ -676,6 +681,9 @@ func (c *ComputeUtil) ensureZone(operation string) error {
 	log.Infof("Recovered zone %q for %q via AggregatedList; proceeding with %s.", zone, c.instanceName, operation)
 	c.zone = zone
 	c.zoneURL = apiURL + c.project + "/zones/" + zone
+	if c.setResolvedZone != nil {
+		c.setResolvedZone(zone)
+	}
 	return nil
 }
 

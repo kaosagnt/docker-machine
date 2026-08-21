@@ -751,3 +751,36 @@ func TestZoneRecovery_StopStartInspectNeverPlacedReturnsNotFound(t *testing.T) {
 		})
 	}
 }
+
+func TestZoneRecovery_WritesZoneBackToDriver(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/aggregated/instances") {
+			resp := raw.InstanceAggregatedList{
+				Items: map[string]raw.InstancesScopedList{
+					"zones/us-east1-c": {
+						Instances: []*raw.Instance{
+							{
+								Name: "runner-abc",
+								Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
+							},
+						},
+					},
+				},
+			}
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+			fmt.Fprint(w, body)
+			return
+		}
+		op := raw.Operation{Name: "op-1", Status: "DONE"}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	var resolved string
+	c := newUnresolvedZoneComputeUtil(t, srv)
+	c.setResolvedZone = func(z string) { resolved = z }
+
+	require.NoError(t, c.stopInstance())
+	assert.Equal(t, "us-east1-c", resolved)
+}
