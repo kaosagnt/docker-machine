@@ -673,3 +673,81 @@ func TestDeleteInstance_DirectModeUnresolvedZoneReturnsError(t *testing.T) {
 	assert.False(t, isNotFound(err), "direct mode must not synthesise a 404")
 	assert.Contains(t, err.Error(), "direct mode")
 }
+
+func zoneRecoveryOperations() map[string]func(c *ComputeUtil) error {
+	return map[string]func(c *ComputeUtil) error{
+		"stop":  func(c *ComputeUtil) error { return c.stopInstance() },
+		"start": func(c *ComputeUtil) error { return c.startInstance() },
+		"inspect": func(c *ComputeUtil) error {
+			_, err := c.instance()
+			return err
+		},
+	}
+}
+
+func TestZoneRecovery_StopStartInspectTargetRecoveredZone(t *testing.T) {
+	for tn, operation := range zoneRecoveryOperations() {
+		t.Run(tn, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/aggregated/instances") {
+					resp := raw.InstanceAggregatedList{
+						Items: map[string]raw.InstancesScopedList{
+							"zones/us-east1-c": {
+								Instances: []*raw.Instance{
+									{
+										Name: "runner-abc",
+										Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
+									},
+								},
+							},
+						},
+					}
+					body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+					fmt.Fprint(w, body)
+					return
+				}
+				if strings.Contains(r.URL.Path, "/instances/runner-abc") &&
+					!strings.Contains(r.URL.Path, "/zones/us-east1-c/instances/runner-abc") {
+					t.Errorf("call should target us-east1-c; got %s", r.URL.Path)
+				}
+				if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/instances/runner-abc") {
+					body, _ := googleapi.WithoutDataWrapper.JSONReader(raw.Instance{Name: "runner-abc"})
+					fmt.Fprint(w, body)
+					return
+				}
+				op := raw.Operation{Name: "op-1", Status: "DONE"}
+				body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+				fmt.Fprint(w, body)
+			}))
+			defer srv.Close()
+
+			c := newUnresolvedZoneComputeUtil(t, srv)
+
+			require.NoError(t, operation(c))
+			assert.Equal(t, "us-east1-c", c.zone)
+		})
+	}
+}
+
+func TestZoneRecovery_StopStartInspectNeverPlacedReturnsNotFound(t *testing.T) {
+	for tn, operation := range zoneRecoveryOperations() {
+		t.Run(tn, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+					t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
+				}
+				resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
+				body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+				fmt.Fprint(w, body)
+			}))
+			defer srv.Close()
+
+			c := newUnresolvedZoneComputeUtil(t, srv)
+
+			err := operation(c)
+
+			require.Error(t, err)
+			assert.True(t, isNotFound(err), "got %T: %v", err, err)
+		})
+	}
+}

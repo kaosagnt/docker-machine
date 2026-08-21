@@ -352,6 +352,10 @@ func (c *ComputeUtil) openFirewallPorts(d *Driver) error {
 
 // instance retrieves the instance.
 func (c *ComputeUtil) instance() (*raw.Instance, error) {
+	if err := c.ensureZone("inspect"); err != nil {
+		return nil, err
+	}
+
 	return c.service.Instances.Get(c.project, c.zone, c.instanceName).Do()
 }
 
@@ -648,31 +652,40 @@ func parseLabels(d *Driver) map[string]string {
 	return labels
 }
 
+// ensureZone recovers from the empty-zone state that bulkInsert can
+// leave behind when create fails after placement (e.g.
+// VM_MIN_COUNT_NOT_REACHED): without recovery, every subsequent
+// zone-scoped API call fails with an empty-zone 400 indefinitely.
+// Direct mode treats empty zone as a programming bug worth surfacing,
+// not a race to recover from. When the instance was never placed,
+// ensureZone returns a not-found googleapi error so callers can treat
+// the machine as gone and reap local state.
+func (c *ComputeUtil) ensureZone(operation string) error {
+	if c.zone != "" {
+		return nil
+	}
+	if !c.bulkInsert {
+		return fmt.Errorf("cannot %s instance %q: zone unresolved in direct mode (Driver.Zone should always be set from --google-zone here)", operation, c.instanceName)
+	}
+	log.Warnf("Zone unresolved for %q after a failed bulkInsert; attempting AggregatedList lookup to recover.", c.instanceName)
+	zone, err := c.discoverInstanceZone()
+	if err != nil {
+		log.Warnf("AggregatedList lookup for %q did not find a placed instance (%v); treating as not-found.", c.instanceName, err)
+		return &googleapi.Error{
+			Code:    http.StatusNotFound,
+			Message: fmt.Sprintf("instance %q has no resolved zone and was not found by AggregatedList; nothing to %s", c.instanceName, operation),
+		}
+	}
+	log.Infof("Recovered zone %q for %q via AggregatedList; proceeding with %s.", zone, c.instanceName, operation)
+	c.zone = zone
+	c.zoneURL = apiURL + c.project + "/zones/" + zone
+	return nil
+}
+
 // deleteInstance deletes the instance, leaving the persistent disk.
-//
-// Recovers from the empty-zone state that bulkInsert can leave behind
-// when create fails after placement (e.g. VM_MIN_COUNT_NOT_REACHED):
-// without recovery, every subsequent delete would fail with "zone
-// unresolved" indefinitely, holding a goroutine and an idle slot per
-// stuck machine. Direct mode treats empty zone as a programming bug
-// worth surfacing, not a race to recover from.
 func (c *ComputeUtil) deleteInstance() error {
-	if c.zone == "" {
-		if !c.bulkInsert {
-			return fmt.Errorf("cannot delete instance %q: zone unresolved in direct mode (Driver.Zone should always be set from --google-zone here)", c.instanceName)
-		}
-		log.Warnf("Zone unresolved for %q after a failed bulkInsert; attempting AggregatedList lookup to recover.", c.instanceName)
-		zone, err := c.discoverInstanceZone()
-		if err != nil {
-			log.Warnf("AggregatedList lookup for %q did not find a placed instance (%v); treating as not-found so local state can be reaped.", c.instanceName, err)
-			return &googleapi.Error{
-				Code:    http.StatusNotFound,
-				Message: fmt.Sprintf("instance %q has no resolved zone and was not found by AggregatedList; nothing to delete", c.instanceName),
-			}
-		}
-		log.Infof("Recovered zone %q for %q via AggregatedList; proceeding with delete.", zone, c.instanceName)
-		c.zone = zone
-		c.zoneURL = apiURL + c.project + "/zones/" + zone
+	if err := c.ensureZone("delete"); err != nil {
+		return err
 	}
 
 	log.Infof("Deleting instance.")
@@ -687,6 +700,10 @@ func (c *ComputeUtil) deleteInstance() error {
 
 // stopInstance stops the instance.
 func (c *ComputeUtil) stopInstance() error {
+	if err := c.ensureZone("stop"); err != nil {
+		return err
+	}
+
 	op, err := c.service.Instances.Stop(c.project, c.zone, c.instanceName).Do()
 	if err != nil {
 		return err
@@ -698,6 +715,10 @@ func (c *ComputeUtil) stopInstance() error {
 
 // startInstance starts the instance.
 func (c *ComputeUtil) startInstance() error {
+	if err := c.ensureZone("start"); err != nil {
+		return err
+	}
+
 	op, err := c.service.Instances.Start(c.project, c.zone, c.instanceName).Do()
 	if err != nil {
 		return err
