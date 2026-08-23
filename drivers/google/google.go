@@ -610,11 +610,23 @@ func (d *Driver) GetState() (state.State, error) {
 		return state.None, err
 	}
 
-	// All we care about is whether the disk exists, so we just check disk for a nil value.
-	// There will be no error if disk is not nil.
-	instance, _ := c.instance()
+	return getState(c)
+}
+
+// getState maps the instance (or, for a stopped-and-deleted instance, its
+// leftover disk) to a machine state. Only a genuine not-found means absent:
+// other lookup failures propagate, because state.None tells callers to reap
+// local state while the VM may still be running.
+func getState(c *ComputeUtil) (state.State, error) {
+	instance, err := c.instance()
+	if err != nil && !isNotFound(err) {
+		return state.None, err
+	}
 	if instance == nil {
-		disk, _ := c.disk()
+		disk, derr := c.disk()
+		if derr != nil && !isNotFound(derr) {
+			return state.None, derr
+		}
 		if disk == nil {
 			return state.None, nil
 		}

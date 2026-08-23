@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/machine/libmachine/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	raw "google.golang.org/api/compute/v1"
@@ -847,4 +848,40 @@ func TestZoneRecovery_WritesZoneBackToDriver(t *testing.T) {
 
 	require.NoError(t, c.stopInstance())
 	assert.Equal(t, "us-east1-c", resolved)
+}
+
+func TestGetState_LookupFailureIsNotAbsence(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+
+	st, err := getState(c)
+
+	require.Error(t, err)
+	assert.Equal(t, state.None, st)
+	assert.Contains(t, err.Error(), "403")
+}
+
+func TestGetState_NeverPlacedWithoutDiskIsNone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/aggregated/instances") {
+			resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+			fmt.Fprint(w, body)
+			return
+		}
+		// Disk lookup: a genuine 404.
+		http.Error(w, `{"error":{"code":404,"message":"not found"}}`, http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+
+	st, err := getState(c)
+
+	require.NoError(t, err)
+	assert.Equal(t, state.None, st)
 }
