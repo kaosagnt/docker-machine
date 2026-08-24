@@ -18,6 +18,8 @@ import (
 
 type metadataMap map[string]string
 
+const cosDockerNetworkReadinessMetadataKey = "gitlab-docker-network-readiness-gate"
+
 type backoffFactory struct {
 	InitialInterval     time.Duration
 	RandomizationFactor float64
@@ -40,32 +42,33 @@ func (bf *backoffFactory) create() *backoff.ExponentialBackOff {
 // Driver is a struct compatible with the docker.hosts.drivers.Driver interface.
 type Driver struct {
 	*drivers.BaseDriver
-	Zone                  string
-	MachineType           string
-	MinCPUPlatform        string
-	MachineImage          string
-	DiskType              string
-	Address               string
-	Network               string
-	Subnetwork            string
-	Preemptible           bool
-	UseInternalIP         bool
-	UseInternalIPOnly     bool
-	ServiceAccount        string
-	Scopes                string
-	DiskSize              int
-	ProvisionedIops       int
-	ProvisionedThroughput int
-	Project               string
-	Tags                  string
-	UseExisting           bool
-	OpenPorts             []string
-	Labels                []string
-	Metadata              metadataMap
-	MetadataFromFile      metadataMap
-	Accelerator           string
-	MaintenancePolicy     string
-	SkipFirewall          bool
+	Zone                          string
+	MachineType                   string
+	MinCPUPlatform                string
+	MachineImage                  string
+	DiskType                      string
+	Address                       string
+	Network                       string
+	Subnetwork                    string
+	Preemptible                   bool
+	UseInternalIP                 bool
+	UseInternalIPOnly             bool
+	ServiceAccount                string
+	Scopes                        string
+	DiskSize                      int
+	ProvisionedIops               int
+	ProvisionedThroughput         int
+	Project                       string
+	Tags                          string
+	UseExisting                   bool
+	OpenPorts                     []string
+	Labels                        []string
+	Metadata                      metadataMap
+	MetadataFromFile              metadataMap
+	Accelerator                   string
+	MaintenancePolicy             string
+	SkipFirewall                  bool
+	COSDockerNetworkReadinessGate bool
 
 	// BulkInsert is the explicit opt-in for bulkInsert mode. Separate
 	// boolean rather than inferred from Region: keeps the provisioning
@@ -298,6 +301,11 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			EnvVar: "GOOGLE_SKIP_FIREWALL_CREATE",
 		},
 		mcnflag.BoolFlag{
+			Name:   "google-cos-docker-network-readiness-gate",
+			Usage:  "Wait for cloud-init and verify Docker bridge networking before marking a Google COS machine ready",
+			EnvVar: "GOOGLE_COS_DOCKER_NETWORK_READINESS_GATE",
+		},
+		mcnflag.BoolFlag{
 			Name:   "google-bulk-insert",
 			Usage:  "(Experimental) Provision via RegionInstances.BulkInsert with a multi-zone LocationPolicy rather than zonal Instances.Insert. The driver issues one BulkInsert per --google-flex-selection entry in preference order, advancing to the next selection on stockout-class failures (VM_MIN_COUNT_NOT_REACHED, ZONE_RESOURCE_POOL_EXHAUSTED). With no --google-flex-selection a single selection is synthesised from --google-machine-type / --google-disk-type. Requires --google-region; mutually exclusive with --google-zone.",
 			EnvVar: "GOOGLE_BULK_INSERT",
@@ -397,6 +405,10 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		d.OpenPorts = flags.StringSlice("google-open-port")
 		d.Labels = flags.StringSlice("google-label")
 		d.Metadata = metadataMapFromStringSlice(flags.StringSlice("google-metadata"))
+		d.COSDockerNetworkReadinessGate = flags.Bool("google-cos-docker-network-readiness-gate")
+		if d.COSDockerNetworkReadinessGate {
+			d.Metadata[cosDockerNetworkReadinessMetadataKey] = "true"
+		}
 		d.MetadataFromFile = metadataMapFromStringSlice(flags.StringSlice("google-metadata-from-file"))
 		d.Accelerator = flags.String("google-accelerator")
 		d.MaintenancePolicy = flags.String("google-maintenance-policy")
