@@ -2,11 +2,13 @@ package google
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -840,6 +842,50 @@ func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
 		assert.Equal(t, int32(2), bulkInsertCalls.Load(), "429 details-only stockout should advance through every selection")
 		assert.Contains(t, err.Error(), "all 2 bulkInsert selections failed with stockout-class errors")
 	})
+}
+
+func TestCreateInstanceViaBulkInsert_CooldownReordersNextCreate(t *testing.T) {
+	var callsMu sync.Mutex
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "bulkInsert") {
+			t.Errorf("unexpected request to %s", r.URL.Path)
+			return
+		}
+		var req raw.BulkInsertInstanceResource
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		machineType := req.InstanceProperties.MachineType
+		callsMu.Lock()
+		calls = append(calls, machineType)
+		callsMu.Unlock()
+		if machineType == "n4d-standard-2" {
+			writeJSONError(w, http.StatusServiceUnavailable, stockout503Body)
+			return
+		}
+		writeJSONError(w, http.StatusForbidden, `{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded"}]}}`)
+	}))
+	defer srv.Close()
+
+	d := NewDriver("runner-abc", t.TempDir())
+	d.Network = "default"
+	d.Project = "p"
+	d.Region = "us-east1"
+	d.FlexStockoutCooldown = time.Minute
+
+	newUtil := func() *ComputeUtil {
+		c := newBulkInsertComputeUtil(t, srv)
+		c.regionExplicit = "us-east1"
+		c.flexSelections = []string{"machine-type=n4d-standard-2", "machine-type=n2d-standard-2"}
+		c.skipFirewall = true
+		return c
+	}
+
+	_ = newUtil().createInstanceViaBulkInsert(d)
+	_ = newUtil().createInstanceViaBulkInsert(d)
+
+	callsMu.Lock()
+	defer callsMu.Unlock()
+	assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, calls)
 }
 
 func TestZoneFromBulkInsertOp(t *testing.T) {

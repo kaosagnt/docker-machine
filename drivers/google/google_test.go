@@ -2,6 +2,7 @@ package google
 
 import (
 	"testing"
+	"time"
 
 	"github.com/docker/machine/libmachine/drivers"
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,58 @@ func TestSetConfigFromFlags(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Empty(t, checkFlags.InvalidFlags)
+}
+
+func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
+	tests := map[string]struct {
+		cooldown  string
+		expected  time.Duration
+		expectErr string
+	}{
+		"disabled by default": {},
+		"durations are stored": {
+			cooldown: "1m",
+			expected: time.Minute,
+		},
+		"invalid cooldown is rejected": {
+			cooldown:  "soon",
+			expectErr: "google-flex-stockout-cooldown",
+		},
+		"negative cooldown is rejected": {
+			cooldown:  "-1s",
+			expectErr: "must be >= 0",
+		},
+		"cooldown requires bulkInsert": {
+			cooldown:  "1m",
+			expectErr: "requires --google-bulk-insert",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			driver := NewDriver("machine", t.TempDir())
+			values := map[string]interface{}{
+				"google-project": "PROJECT",
+			}
+			if tt.cooldown != "" {
+				values["google-flex-stockout-cooldown"] = tt.cooldown
+			}
+			if tt.expectErr == "" && tt.cooldown != "" {
+				values["google-bulk-insert"] = true
+				values["google-region"] = "us-east1"
+			}
+
+			flags := &drivers.CheckDriverOptions{FlagsValues: values, CreateFlags: driver.GetCreateFlags()}
+			err := driver.SetConfigFromFlags(flags)
+			if tt.expectErr != "" {
+				require.ErrorContains(t, err, tt.expectErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, driver.FlexStockoutCooldown)
+		})
+	}
 }
 
 func TestSetConfigFromFlags_COSDockerNetworkReadinessGate(t *testing.T) {

@@ -36,6 +36,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/machine/libmachine/log"
 	raw "google.golang.org/api/compute/v1"
@@ -146,19 +147,28 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 		return err
 	}
 
-	log.Infof("Creating instance via bulkInsert in %q across %d selection(s)", c.region(), len(selections))
+	health := newPlacementHealth(d, time.Now)
+	selections = health.order(d, selections)
+
+	log.Infof("Creating instance via bulkInsert in %q across %d eligible selection(s)", c.region(), len(selections))
 
 	stockoutErrs := make([]error, 0, len(selections))
 	for i, sel := range selections {
 		log.Infof("bulkInsert attempt %d/%d: machine-type=%q disk-type=%q", i+1, len(selections), sel.MachineType, sel.DiskType)
 		retryable, attemptErr := c.attemptBulkInsertForSelection(d, sel)
 		if attemptErr == nil {
+			if err := health.recordPlacement(d, sel); err != nil {
+				log.Warnf("Could not record successful bulkInsert placement health: %v", err)
+			}
 			return c.finishPostCreate(d)
 		}
 		if !retryable {
 			return attemptErr
 		}
 		log.Warnf("bulkInsert selection %d/%d (%s) hit stockout-class failure, falling through: %v", i+1, len(selections), sel.MachineType, attemptErr)
+		if err := health.recordStockout(d, sel); err != nil {
+			log.Warnf("Could not record bulkInsert stockout health: %v", err)
+		}
 		stockoutErrs = append(stockoutErrs, fmt.Errorf("selection %d/%d (machine-type=%s): %w", i+1, len(selections), sel.MachineType, attemptErr))
 	}
 
