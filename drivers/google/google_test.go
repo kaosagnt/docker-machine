@@ -27,14 +27,18 @@ func TestSetConfigFromFlags(t *testing.T) {
 
 func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 	tests := map[string]struct {
-		cooldown  string
-		expected  time.Duration
-		expectErr string
+		cooldown      string
+		probeLease    string
+		expected      time.Duration
+		expectedProbe time.Duration
+		expectErr     string
 	}{
-		"disabled by default": {},
+		"disabled by default": {expectedProbe: 90 * time.Second},
 		"durations are stored": {
-			cooldown: "1m",
-			expected: time.Minute,
+			cooldown:      "2m",
+			probeLease:    "90s",
+			expected:      2 * time.Minute,
+			expectedProbe: 90 * time.Second,
 		},
 		"invalid cooldown is rejected": {
 			cooldown:  "soon",
@@ -48,6 +52,16 @@ func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 			cooldown:  "1m",
 			expectErr: "requires --google-bulk-insert",
 		},
+		"invalid probe lease is rejected": {
+			cooldown:   "1m",
+			probeLease: "later",
+			expectErr:  "google-flex-stockout-probe-lease",
+		},
+		"non-positive probe lease is rejected when enabled": {
+			cooldown:   "1m",
+			probeLease: "0s",
+			expectErr:  "must be > 0",
+		},
 	}
 
 	for name, tt := range tests {
@@ -58,6 +72,9 @@ func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 			}
 			if tt.cooldown != "" {
 				values["google-flex-stockout-cooldown"] = tt.cooldown
+			}
+			if tt.probeLease != "" {
+				values["google-flex-stockout-probe-lease"] = tt.probeLease
 			}
 			if tt.expectErr == "" && tt.cooldown != "" {
 				values["google-bulk-insert"] = true
@@ -73,6 +90,7 @@ func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, driver.FlexStockoutCooldown)
+			assert.Equal(t, tt.expectedProbe, driver.FlexStockoutProbeLease)
 		})
 	}
 }

@@ -27,6 +27,8 @@ const (
 
 type placementClassHealth struct {
 	CooldownUntil time.Time `json:"cooldown_until,omitempty"`
+	ProbeUntil    time.Time `json:"probe_until,omitempty"`
+	ProbeOwner    string    `json:"probe_owner,omitempty"`
 	LastStockout  time.Time `json:"last_stockout,omitempty"`
 	LastPlaced    time.Time `json:"last_placed,omitempty"`
 }
@@ -98,18 +100,52 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 
 	now := h.now()
 	healthy := make(map[string]struct{}, len(configured))
+	type probeCandidate struct {
+		key      string
+		position int
+		expires  time.Time
+	}
+	var candidates []probeCandidate
 
-	for _, selection := range configured {
+	for i, selection := range configured {
 		key := h.selectionKey(d, selection)
 		entry, found := state.Classes[key]
 		if !found || entry.CooldownUntil.IsZero() {
 			healthy[key] = struct{}{}
 			continue
 		}
-		if now.Before(entry.CooldownUntil) {
+		if now.Before(entry.CooldownUntil) || now.Before(entry.ProbeUntil) {
 			continue
 		}
-		healthy[key] = struct{}{}
+		candidates = append(candidates, probeCandidate{key: key, position: i, expires: entry.CooldownUntil})
+	}
+
+	// When every class is constrained, preserve the existing bounded ladder
+	// pass. Suppressing every selection here would require a retry-after contract
+	// with Runner to avoid local create/remove churn.
+	if len(healthy) == 0 {
+		return append([]flexSelection(nil), configured...)
+	}
+
+	probeKey := ""
+	if len(candidates) > 0 {
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].expires.Equal(candidates[j].expires) {
+				return candidates[i].position < candidates[j].position
+			}
+			return candidates[i].expires.Before(candidates[j].expires)
+		})
+		probe := candidates[0]
+		entry := state.Classes[probe.key]
+		entry.ProbeUntil = now.Add(d.FlexStockoutProbeLease)
+		entry.ProbeOwner = d.MachineName
+		state.Classes[probe.key] = entry
+		if err := h.save(state); err != nil {
+			log.Warnf("Could not claim bulkInsert placement probe; using configured order: %v", err)
+			return append([]flexSelection(nil), configured...)
+		}
+		probeKey = probe.key
+		log.Infof("Probing bulkInsert flex selection machine-type=%q after stockout cooldown", configured[probe.position].MachineType)
 	}
 
 	ordered := make([]flexSelection, 0, len(configured))
@@ -118,13 +154,20 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 			ordered = append(ordered, selection)
 		}
 	}
+	if probeKey != "" {
+		for _, selection := range configured {
+			if h.selectionKey(d, selection) == probeKey {
+				ordered = append(ordered, selection)
+				break
+			}
+		}
+	}
 	for _, selection := range configured {
 		key := h.selectionKey(d, selection)
-		if _, ok := healthy[key]; ok {
+		if _, ok := healthy[key]; ok || key == probeKey {
 			continue
 		}
-		log.Infof("Trying cooling bulkInsert flex selection machine-type=%q after other selections", selection.MachineType)
-		ordered = append(ordered, selection)
+		log.Infof("Skipping cooling bulkInsert flex selection machine-type=%q while another selection is eligible", selection.MachineType)
 	}
 	return ordered
 }
@@ -137,6 +180,8 @@ func (h *placementHealth) recordStockout(d *Driver, selection flexSelection) err
 		key := h.selectionKey(d, selection)
 		entry := state.Classes[key]
 		entry.CooldownUntil = now.Add(d.FlexStockoutCooldown)
+		entry.ProbeUntil = time.Time{}
+		entry.ProbeOwner = ""
 		entry.LastStockout = now
 		state.Classes[key] = entry
 	})
@@ -150,6 +195,8 @@ func (h *placementHealth) recordPlacement(d *Driver, selection flexSelection) er
 		key := h.selectionKey(d, selection)
 		entry := state.Classes[key]
 		entry.CooldownUntil = time.Time{}
+		entry.ProbeUntil = time.Time{}
+		entry.ProbeOwner = ""
 		entry.LastPlaced = now
 		state.Classes[key] = entry
 	})

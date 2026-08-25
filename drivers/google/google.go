@@ -87,6 +87,9 @@ type Driver struct {
 	// FlexStockoutCooldown temporarily deprioritizes a flex selection after a
 	// recognized capacity failure. Zero preserves the configured order.
 	FlexStockoutCooldown time.Duration
+	// FlexStockoutProbeLease limits recovery probes across concurrent
+	// docker-machine command processes sharing StorePath.
+	FlexStockoutProbeLease time.Duration
 
 	// LocationZones constrains zone selection. Each entry is
 	// "zone[:PREFERENCE]" (ALLOW / DENY); empty means GCP picks any
@@ -330,6 +333,12 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			EnvVar: "GOOGLE_FLEX_STOCKOUT_COOLDOWN",
 			Value:  "0s",
 		},
+		mcnflag.StringFlag{
+			Name:   "google-flex-stockout-probe-lease",
+			Usage:  "Lease duration that permits one process to probe a flex selection after its stockout cooldown expires.",
+			EnvVar: "GOOGLE_FLEX_STOCKOUT_PROBE_LEASE",
+			Value:  "90s",
+		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-location-zone",
 			Usage:  "(Experimental) Zone constraint for bulkInsert. Format: zone[:PREFERENCE] where preference is ALLOW (default) or DENY. Repeat per zone. Empty = any zone in --google-region. Note: GCE bulkInsert only accepts ALLOW or DENY here (PREFERRED is not valid and is coerced to ALLOW with a warning).",
@@ -439,6 +448,13 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	}
 	if d.FlexStockoutCooldown < 0 {
 		return fmt.Errorf("google-flex-stockout-cooldown must be >= 0, got %s", d.FlexStockoutCooldown)
+	}
+	d.FlexStockoutProbeLease, err = time.ParseDuration(flags.String("google-flex-stockout-probe-lease"))
+	if err != nil {
+		return fmt.Errorf("invalid google-flex-stockout-probe-lease: %w", err)
+	}
+	if d.FlexStockoutCooldown > 0 && d.FlexStockoutProbeLease <= 0 {
+		return fmt.Errorf("google-flex-stockout-probe-lease must be > 0 when stockout cooldown is enabled, got %s", d.FlexStockoutProbeLease)
 	}
 
 	if d.BulkInsert {

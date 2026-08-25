@@ -30,6 +30,7 @@ func newTestPlacementHealth(t *testing.T) (*placementHealth, *Driver, time.Time)
 	d.Region = "us-east1"
 	d.LocationZones = []string{"us-east1-b", "us-east1-c", "us-east1-d"}
 	d.FlexStockoutCooldown = time.Minute
+	d.FlexStockoutProbeLease = 90 * time.Second
 	return newPlacementHealth(d, func() time.Time { return now }), d, now
 }
 
@@ -52,17 +53,17 @@ func TestPlacementHealthDisabledPreservesConfiguredOrder(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestPlacementHealthStockoutMovesSelectionBehindHealthySelections(t *testing.T) {
+func TestPlacementHealthStockoutSkipsSelectionWhileHealthySelectionsRemain(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	selections := testSelections()
 	require.NoError(t, health.recordStockout(d, selections[0]))
 
 	ordered := health.order(d, selections)
 
-	assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2", "n4d-standard-2"}, machineTypes(ordered))
+	assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2"}, machineTypes(ordered))
 }
 
-func TestPlacementHealthPreservesConfiguredOrderWithinPartitions(t *testing.T) {
+func TestPlacementHealthPreservesConfiguredOrderAmongEligibleSelections(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	selections := testSelections()
 	require.NoError(t, health.recordStockout(d, selections[0]))
@@ -70,7 +71,7 @@ func TestPlacementHealthPreservesConfiguredOrderWithinPartitions(t *testing.T) {
 
 	ordered := health.order(d, selections)
 
-	assert.Equal(t, []string{"n2d-standard-2", "n4d-standard-2", "n4-standard-2"}, machineTypes(ordered))
+	assert.Equal(t, []string{"n2d-standard-2"}, machineTypes(ordered))
 }
 
 func TestPlacementHealthExpiredCooldownRestoresConfiguredOrder(t *testing.T) {
@@ -84,6 +85,38 @@ func TestPlacementHealthExpiredCooldownRestoresConfiguredOrder(t *testing.T) {
 	ordered := health.order(d, selections)
 
 	assert.Equal(t, machineTypes(selections), machineTypes(ordered))
+}
+
+func TestPlacementHealthExpiredCooldownGrantsOneProbeAfterHealthySelections(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	selections := testSelections()
+	require.NoError(t, health.recordStockout(d, selections[0]))
+	health.now = func() time.Time { return now.Add(61 * time.Second) }
+
+	const workers = 8
+	orders := make(chan []string, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			other := newPlacementHealth(d, health.now)
+			orders <- machineTypes(other.order(d, selections))
+		}()
+	}
+	wg.Wait()
+	close(orders)
+
+	probes := 0
+	for order := range orders {
+		if len(order) == 3 {
+			probes++
+			assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2", "n4d-standard-2"}, order)
+		} else {
+			assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2"}, order)
+		}
+	}
+	assert.Equal(t, 1, probes)
 }
 
 func TestPlacementHealthAllCoolingUsesConfiguredOrder(t *testing.T) {
