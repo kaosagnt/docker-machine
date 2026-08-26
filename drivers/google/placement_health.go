@@ -163,8 +163,11 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 		// The priority probe must be attempted. Returning configured order can strand a
 		// lower-ranked probe behind an earlier healthy selection that succeeds.
 		ordered := []flexSelection{configured[probePosition]}
-		for i, selection := range configured {
-			if i != probePosition {
+		for _, selection := range healthy {
+			ordered = append(ordered, selection)
+		}
+		for _, selection := range cooling {
+			if !samePlacementClass(h.selectionClass(d, selection), state.Classes[probeClassPosition].Class) {
 				ordered = append(ordered, selection)
 			}
 		}

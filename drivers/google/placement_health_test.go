@@ -111,6 +111,15 @@ func TestPlacementHealthLowerRankedProbeIsAttemptedFirst(t *testing.T) {
 	assert.Equal(t, []string{"n4-standard-2", "n4d-standard-2", "n2d-standard-2"}, machineTypes(health.order(d, selections)))
 }
 
+func TestPlacementHealthProbeRemainderKeepsHealthyBeforeCooling(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	selections := testSelections()
+	require.NoError(t, health.recordStockoutAt(d, selections[0], now))
+	require.NoError(t, health.recordStockoutAt(d, selections[2], now.Add(time.Second)))
+	health.now = func() time.Time { return now.Add(62 * time.Second) }
+	assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4-standard-2"}, machineTypes(health.order(d, selections)))
+}
+
 func TestPlacementHealthZeroProbeLeaseDisablesPriorityProbe(t *testing.T) {
 	health, d, now := newTestPlacementHealth(t)
 	d.FlexStockoutProbeLease = 0
