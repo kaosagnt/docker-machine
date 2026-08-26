@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	placementHealthVersion     = 2
+	placementHealthVersion     = 1
 	placementHealthFilename    = "google-flex-stockout-health.json"
 	placementHealthLockSuffix  = ".lock"
 	placementHealthLockTimeout = time.Second
@@ -301,11 +301,7 @@ func (h *placementHealth) update(change func(*placementHealthFile, time.Time) bo
 	if err != nil {
 		var versionErr *placementHealthVersionError
 		if errors.As(err, &versionErr) {
-			if versionErr.version != 1 {
-				return err
-			}
-			log.Warn("Rebuilding legacy bulkInsert placement health state")
-			state = newPlacementHealthFile()
+			return err
 		} else {
 			var corruptErr *placementHealthCorruptError
 			if !errors.As(err, &corruptErr) {

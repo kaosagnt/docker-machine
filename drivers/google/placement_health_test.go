@@ -207,16 +207,6 @@ func TestPlacementHealthFutureVersionWithDifferentSchemaIsNotOverwritten(t *test
 	assert.Equal(t, original, actual)
 }
 
-func TestPlacementHealthLegacyV1StateIsRebuilt(t *testing.T) {
-	health, d, _ := newTestPlacementHealth(t)
-	require.NoError(t, os.WriteFile(health.statePath, []byte(`{"version":1,"classes":{"opaque":{}}}`), 0600))
-	require.NoError(t, health.recordStockout(d, testSelections()[0]))
-	state, err := health.load()
-	require.NoError(t, err)
-	assert.Equal(t, placementHealthVersion, state.Version)
-	require.Len(t, state.Classes, 1)
-}
-
 func TestPlacementHealthStateIsReadable(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	require.NoError(t, health.recordStockout(d, testSelections()[0]))
