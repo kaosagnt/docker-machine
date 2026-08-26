@@ -15,14 +15,13 @@ import (
 )
 
 const (
-	placementHealthVersion      = 2
-	placementHealthFilename     = "google-flex-stockout-health.json"
-	placementHealthLockSuffix   = ".lock"
-	placementHealthLockTimeout  = time.Second
-	placementHealthMaxFileSize  = 128 * 1024
-	placementHealthMaxAge       = 24 * time.Hour
-	placementHealthMaxClasses   = 128
-	placementHealthMaxClockSkew = 5 * time.Minute
+	placementHealthVersion     = 2
+	placementHealthFilename    = "google-flex-stockout-health.json"
+	placementHealthLockSuffix  = ".lock"
+	placementHealthLockTimeout = time.Second
+	placementHealthMaxFileSize = 128 * 1024
+	placementHealthMaxAge      = 24 * time.Hour
+	placementHealthMaxClasses  = 128
 )
 
 type placementClass struct {
@@ -148,7 +147,7 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 		entry := state.Classes[index]
 		lastObservation := placementHealthLatestObservation(entry)
 		if (!lastObservation.IsZero() && now.Sub(lastObservation) > placementHealthMaxAge) ||
-			lastObservation.After(now.Add(placementHealthMaxClockSkew)) {
+			lastObservation.After(now) {
 			healthy = append(healthy, selection)
 			continue
 		}
@@ -267,7 +266,6 @@ func (h *placementHealth) releaseProbe(d *Driver, selection flexSelection) error
 			return false
 		}
 		entry := state.Classes[index]
-		entry.CooldownUntil = now.Add(d.FlexStockoutCooldown)
 		entry.ProbeUntil = time.Time{}
 		entry.ProbeOwner = ""
 		state.Classes[index] = entry
@@ -308,7 +306,7 @@ func (h *placementHealth) update(change func(*placementHealthFile, time.Time) bo
 	}
 	now := h.now()
 	for i := range state.Classes {
-		if placementHealthLatestObservation(state.Classes[i]).After(now.Add(placementHealthMaxClockSkew)) {
+		if placementHealthLatestObservation(state.Classes[i]).After(now) {
 			state.Classes[i].CooldownUntil = time.Time{}
 			state.Classes[i].ProbeUntil = time.Time{}
 			state.Classes[i].ProbeOwner = ""

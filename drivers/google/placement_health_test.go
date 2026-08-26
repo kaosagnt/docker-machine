@@ -298,6 +298,7 @@ func TestPlacementHealthNewestAttemptObservationWins(t *testing.T) {
 	health, d, now := newTestPlacementHealth(t)
 	selection := testSelections()[0]
 	require.NoError(t, health.recordStockoutAt(d, selection, now))
+	health.now = func() time.Time { return now.Add(time.Second) }
 	require.NoError(t, health.recordPlacementAt(d, selection, now.Add(time.Second)))
 	require.NoError(t, health.recordStockoutAt(d, selection, now.Add(-time.Second)))
 
@@ -311,6 +312,7 @@ func TestPlacementHealthNewestAttemptObservationWins(t *testing.T) {
 func TestPlacementHealthLatestCompletedOutcomeWins(t *testing.T) {
 	health, d, now := newTestPlacementHealth(t)
 	selection := testSelections()[0]
+	health.now = func() time.Time { return now.Add(2 * time.Second) }
 	require.NoError(t, health.recordStockoutAt(d, selection, now.Add(time.Second)))
 	require.NoError(t, health.recordPlacementAt(d, selection, now.Add(2*time.Second)))
 
@@ -334,14 +336,14 @@ func TestPlacementHealthReleaseProbeClearsOnlyOwnerLease(t *testing.T) {
 	require.Len(t, state.Classes, 1)
 	assert.True(t, state.Classes[0].ProbeUntil.IsZero())
 	assert.Empty(t, state.Classes[0].ProbeOwner)
-	assert.Equal(t, now.Add(61*time.Second).Add(d.FlexStockoutCooldown), state.Classes[0].CooldownUntil)
+	assert.Equal(t, now.Add(d.FlexStockoutCooldown), state.Classes[0].CooldownUntil)
 }
 
 func TestPlacementHealthOrderIgnoresStaleAndFutureObservations(t *testing.T) {
 	health, d, now := newTestPlacementHealth(t)
 	selections := testSelections()
 	state := newPlacementHealthFile()
-	for i, observedAt := range []time.Time{now.Add(-25 * time.Hour), now.Add(10 * time.Minute)} {
+	for i, observedAt := range []time.Time{now.Add(-25 * time.Hour), now.Add(time.Second)} {
 		state.Classes = append(state.Classes, placementClassHealth{
 			Class:         health.selectionClass(d, selections[i]),
 			CooldownUntil: now.Add(time.Hour),
