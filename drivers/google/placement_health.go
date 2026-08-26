@@ -388,6 +388,9 @@ func (h *placementHealth) save(state *placementHealthFile) error {
 	if err != nil {
 		return err
 	}
+	if len(data) > placementHealthMaxFileSize {
+		return fmt.Errorf("placement health state exceeds %d bytes", placementHealthMaxFileSize)
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(h.statePath), placementHealthFilename+".tmp-")
 	if err != nil {
 		return err

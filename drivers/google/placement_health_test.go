@@ -186,6 +186,15 @@ func TestPlacementHealthOversizedStateIsNotOverwritten(t *testing.T) {
 	assert.Equal(t, original, actual)
 }
 
+func TestPlacementHealthOversizedStateIsNotSaved(t *testing.T) {
+	health, _, _ := newTestPlacementHealth(t)
+	state := newPlacementHealthFile()
+	state.Classes = append(state.Classes, placementClassHealth{Class: placementClass{Project: string(make([]byte, placementHealthMaxFileSize))}})
+	require.ErrorContains(t, health.save(state), "state exceeds")
+	_, err := os.Stat(health.statePath)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestPlacementHealthFutureVersionIsNotOverwritten(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	original := []byte(`{"version":999,"classes":[]}`)
