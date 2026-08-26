@@ -220,8 +220,10 @@ func (h *placementHealth) recordStockoutAt(d *Driver, selection flexSelection, o
 			}
 		}
 		entry.CooldownUntil = observedAt.Add(d.FlexStockoutCooldown)
-		entry.ProbeUntil = time.Time{}
-		entry.ProbeOwner = ""
+		if entry.ProbeOwner == "" || entry.ProbeOwner == h.probeOwner || !observedAt.Before(entry.ProbeUntil) {
+			entry.ProbeUntil = time.Time{}
+			entry.ProbeOwner = ""
+		}
 		entry.LastStockout = observedAt
 		if index >= 0 {
 			state.Classes[index] = entry

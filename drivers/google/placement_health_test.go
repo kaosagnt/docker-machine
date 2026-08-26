@@ -386,6 +386,26 @@ func TestPlacementHealthDifferentInvocationCannotReleaseProbe(t *testing.T) {
 	assert.Equal(t, health.probeOwner, state.Classes[0].ProbeOwner)
 }
 
+func TestPlacementHealthLateStockoutCannotClearNewOwnerLease(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	selection := testSelections()[0]
+	require.NoError(t, health.recordStockoutAt(d, selection, now))
+	health.now = func() time.Time { return now.Add(61 * time.Second) }
+	_ = health.order(d, testSelections())
+
+	state, err := health.load()
+	require.NoError(t, err)
+	state.Classes[0].ProbeUntil = now.Add(10 * time.Minute)
+	state.Classes[0].ProbeOwner = "new-owner"
+	require.NoError(t, health.save(state))
+	require.NoError(t, health.recordStockoutAt(d, selection, now.Add(2*time.Minute)))
+
+	state, err = health.load()
+	require.NoError(t, err)
+	assert.Equal(t, "new-owner", state.Classes[0].ProbeOwner)
+	assert.Equal(t, now.Add(10*time.Minute), state.Classes[0].ProbeUntil)
+}
+
 func TestPlacementHealthNonOwnerSuccessPreservesActiveProbeLease(t *testing.T) {
 	health, d, now := newTestPlacementHealth(t)
 	selection := testSelections()[0]
