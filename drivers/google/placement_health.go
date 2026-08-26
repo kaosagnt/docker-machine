@@ -146,7 +146,7 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 		}
 		entry := state.Classes[index]
 		lastObservation := placementHealthLatestObservation(entry)
-		if (!lastObservation.IsZero() && now.Sub(lastObservation) > placementHealthMaxAge) ||
+		if (!lastObservation.IsZero() && now.Sub(lastObservation) > placementHealthMaxAge && !now.Before(entry.CooldownUntil)) ||
 			lastObservation.After(now) {
 			healthy = append(healthy, selection)
 			continue

@@ -255,6 +255,19 @@ func TestPlacementHealthKeepsActiveCooldownOlderThanPruneAge(t *testing.T) {
 	assert.Len(t, state.Classes, 1)
 }
 
+func TestPlacementHealthOrderHonorsActiveCooldownOlderThanPruneAge(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	selections := testSelections()
+	state := newPlacementHealthFile()
+	state.Classes = append(state.Classes, placementClassHealth{
+		Class:         health.selectionClass(d, selections[0]),
+		LastStockout:  now.Add(-25 * time.Hour),
+		CooldownUntil: now.Add(time.Hour),
+	})
+	require.NoError(t, health.save(state))
+	assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2", "n4d-standard-2"}, machineTypes(health.order(d, selections)))
+}
+
 func TestPlacementHealthClassBoundKeepsMostRecentActiveEntries(t *testing.T) {
 	health, d, now := newTestPlacementHealth(t)
 	state := newPlacementHealthFile()
@@ -344,9 +357,13 @@ func TestPlacementHealthOrderIgnoresStaleAndFutureObservations(t *testing.T) {
 	selections := testSelections()
 	state := newPlacementHealthFile()
 	for i, observedAt := range []time.Time{now.Add(-25 * time.Hour), now.Add(time.Second)} {
+		cooldownUntil := now.Add(-time.Hour)
+		if observedAt.After(now) {
+			cooldownUntil = now.Add(time.Hour)
+		}
 		state.Classes = append(state.Classes, placementClassHealth{
 			Class:         health.selectionClass(d, selections[i]),
-			CooldownUntil: now.Add(time.Hour),
+			CooldownUntil: cooldownUntil,
 			LastStockout:  observedAt,
 		})
 	}
