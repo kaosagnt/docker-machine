@@ -20,7 +20,3 @@ func acquirePlacementHealthLock(path string, timeout time.Duration) (func() erro
 	}
 	return lock.Unlock, nil
 }
-
-func replacePlacementHealthFile(source, destination string) error {
-	return os.Rename(source, destination)
-}

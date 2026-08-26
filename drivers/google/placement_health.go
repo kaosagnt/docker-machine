@@ -304,14 +304,13 @@ func (h *placementHealth) update(change func(*placementHealthFile, time.Time) bo
 		var versionErr *placementHealthVersionError
 		if errors.As(err, &versionErr) {
 			return err
-		} else {
-			var corruptErr *placementHealthCorruptError
-			if !errors.As(err, &corruptErr) {
-				return err
-			}
-			log.Warnf("Rebuilding invalid bulkInsert placement health state: %v", err)
-			state = newPlacementHealthFile()
 		}
+		var corruptErr *placementHealthCorruptError
+		if !errors.As(err, &corruptErr) {
+			return err
+		}
+		log.Warnf("Rebuilding invalid bulkInsert placement health state: %v", err)
+		state = newPlacementHealthFile()
 	}
 	now := h.now()
 	for i := range state.Classes {
@@ -414,7 +413,7 @@ func (h *placementHealth) save(state *placementHealthFile) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return replacePlacementHealthFile(tmpName, h.statePath)
+	return os.Rename(tmpName, h.statePath)
 }
 
 func (h *placementHealth) prune(state *placementHealthFile, now time.Time) bool {
