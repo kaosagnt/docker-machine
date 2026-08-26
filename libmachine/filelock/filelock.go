@@ -27,9 +27,13 @@ func Acquire(path string, timeout time.Duration) (*Lock, error) {
 			return &Lock{file: file}, nil
 		}
 		_ = file.Close()
-		if time.Now().After(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			return nil, ErrAcquireTimeout
 		}
-		time.Sleep(10 * time.Millisecond)
+		if remaining > 10*time.Millisecond {
+			remaining = 10 * time.Millisecond
+		}
+		time.Sleep(remaining)
 	}
 }

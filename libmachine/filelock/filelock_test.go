@@ -61,6 +61,20 @@ func TestAcquireContentionAndReacquisition(t *testing.T) {
 	require.NoError(t, second.Unlock())
 }
 
+func TestAcquireDoesNotSucceedAfterTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock")
+	first, err := Acquire(path, time.Second)
+	require.NoError(t, err)
+	go func() {
+		time.Sleep(60 * time.Millisecond)
+		_ = first.Unlock()
+	}()
+	started := time.Now()
+	_, err = Acquire(path, 50*time.Millisecond)
+	assert.ErrorIs(t, err, ErrAcquireTimeout)
+	assert.Less(t, time.Since(started), 60*time.Millisecond)
+}
+
 func TestAcquireCreatesOwnerOnlyFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lock")
 	lock, err := Acquire(path, time.Second)
