@@ -2,7 +2,10 @@ package filelock
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +13,41 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFileLockHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_FILELOCK_HELPER") != "1" {
+		return
+	}
+	lock, err := Acquire(os.Getenv("FILELOCK_PATH"), time.Second)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	fmt.Println("locked")
+	time.Sleep(300 * time.Millisecond)
+	_ = lock.Unlock()
+	os.Exit(0)
+}
+
+func TestAcquireAcrossProcesses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock")
+	cmd := exec.Command(os.Args[0], "-test.run=TestFileLockHelperProcess")
+	cmd.Env = append(os.Environ(), "GO_WANT_FILELOCK_HELPER=1", "FILELOCK_PATH="+path)
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	buf := make([]byte, len("locked\n"))
+	_, err = io.ReadFull(stdout, buf)
+	require.NoError(t, err)
+	assert.Equal(t, "locked\n", string(buf))
+
+	_, err = Acquire(path, 50*time.Millisecond)
+	assert.ErrorIs(t, err, ErrAcquireTimeout)
+	require.NoError(t, cmd.Wait())
+	lock, err := Acquire(path, time.Second)
+	require.NoError(t, err)
+	require.NoError(t, lock.Unlock())
+}
 
 func TestAcquireContentionAndReacquisition(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lock")
