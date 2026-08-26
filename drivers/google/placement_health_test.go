@@ -334,7 +334,22 @@ func TestPlacementHealthReleaseProbeClearsOnlyOwnerLease(t *testing.T) {
 	require.Len(t, state.Classes, 1)
 	assert.True(t, state.Classes[0].ProbeUntil.IsZero())
 	assert.Empty(t, state.Classes[0].ProbeOwner)
-	assert.True(t, state.Classes[0].CooldownUntil.IsZero())
+	assert.Equal(t, now.Add(61*time.Second).Add(d.FlexStockoutCooldown), state.Classes[0].CooldownUntil)
+}
+
+func TestPlacementHealthOrderIgnoresStaleAndFutureObservations(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	selections := testSelections()
+	state := newPlacementHealthFile()
+	for i, observedAt := range []time.Time{now.Add(-25 * time.Hour), now.Add(10 * time.Minute)} {
+		state.Classes = append(state.Classes, placementClassHealth{
+			Class:         health.selectionClass(d, selections[i]),
+			CooldownUntil: now.Add(time.Hour),
+			LastStockout:  observedAt,
+		})
+	}
+	require.NoError(t, health.save(state))
+	assert.Equal(t, machineTypes(selections), machineTypes(health.order(d, selections)))
 }
 
 func TestPlacementHealthDifferentInvocationCannotReleaseProbe(t *testing.T) {

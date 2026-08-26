@@ -15,13 +15,14 @@ import (
 )
 
 const (
-	placementHealthVersion     = 2
-	placementHealthFilename    = "google-flex-stockout-health.json"
-	placementHealthLockSuffix  = ".lock"
-	placementHealthLockTimeout = time.Second
-	placementHealthMaxFileSize = 128 * 1024
-	placementHealthMaxAge      = 24 * time.Hour
-	placementHealthMaxClasses  = 128
+	placementHealthVersion      = 2
+	placementHealthFilename     = "google-flex-stockout-health.json"
+	placementHealthLockSuffix   = ".lock"
+	placementHealthLockTimeout  = time.Second
+	placementHealthMaxFileSize  = 128 * 1024
+	placementHealthMaxAge       = 24 * time.Hour
+	placementHealthMaxClasses   = 128
+	placementHealthMaxClockSkew = 5 * time.Minute
 )
 
 type placementClass struct {
@@ -145,6 +146,12 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 			continue
 		}
 		entry := state.Classes[index]
+		lastObservation := placementHealthLatestObservation(entry)
+		if (!lastObservation.IsZero() && now.Sub(lastObservation) > placementHealthMaxAge) ||
+			lastObservation.After(now.Add(placementHealthMaxClockSkew)) {
+			healthy = append(healthy, selection)
+			continue
+		}
 		cooling = append(cooling, selection)
 		coolingPositions = append(coolingPositions, position)
 		if d.FlexStockoutProbeLease > 0 && !now.Before(entry.CooldownUntil) && !now.Before(entry.ProbeUntil) &&
@@ -254,13 +261,13 @@ func (h *placementHealth) releaseProbe(d *Driver, selection flexSelection) error
 	if d.FlexStockoutCooldown <= 0 || !h.available {
 		return nil
 	}
-	return h.update(func(state *placementHealthFile, _ time.Time) bool {
+	return h.update(func(state *placementHealthFile, now time.Time) bool {
 		index := findPlacementClass(state, h.selectionClass(d, selection))
 		if index < 0 || state.Classes[index].ProbeOwner != h.probeOwner {
 			return false
 		}
 		entry := state.Classes[index]
-		entry.CooldownUntil = time.Time{}
+		entry.CooldownUntil = now.Add(d.FlexStockoutCooldown)
 		entry.ProbeUntil = time.Time{}
 		entry.ProbeOwner = ""
 		state.Classes[index] = entry
@@ -300,6 +307,15 @@ func (h *placementHealth) update(change func(*placementHealthFile, time.Time) bo
 		}
 	}
 	now := h.now()
+	for i := range state.Classes {
+		if placementHealthLatestObservation(state.Classes[i]).After(now.Add(placementHealthMaxClockSkew)) {
+			state.Classes[i].CooldownUntil = time.Time{}
+			state.Classes[i].ProbeUntil = time.Time{}
+			state.Classes[i].ProbeOwner = ""
+			state.Classes[i].LastStockout = time.Time{}
+			state.Classes[i].LastPlaced = time.Time{}
+		}
+	}
 	changed := change(state, now)
 	changed = h.prune(state, now) || changed
 	if !changed {
