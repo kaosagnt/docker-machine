@@ -334,6 +334,7 @@ func TestPlacementHealthReleaseProbeClearsOnlyOwnerLease(t *testing.T) {
 	require.Len(t, state.Classes, 1)
 	assert.True(t, state.Classes[0].ProbeUntil.IsZero())
 	assert.Empty(t, state.Classes[0].ProbeOwner)
+	assert.True(t, state.Classes[0].CooldownUntil.IsZero())
 }
 
 func TestPlacementHealthDifferentInvocationCannotReleaseProbe(t *testing.T) {

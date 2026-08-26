@@ -260,6 +260,7 @@ func (h *placementHealth) releaseProbe(d *Driver, selection flexSelection) error
 			return false
 		}
 		entry := state.Classes[index]
+		entry.CooldownUntil = time.Time{}
 		entry.ProbeUntil = time.Time{}
 		entry.ProbeOwner = ""
 		state.Classes[index] = entry

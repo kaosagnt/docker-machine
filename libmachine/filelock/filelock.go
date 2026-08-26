@@ -29,10 +29,10 @@ func Acquire(path string, timeout time.Duration) (*Lock, error) {
 	if timeout < 0 {
 		return nil, ErrInvalidTimeout
 	}
-	deadline := time.Now().Add(timeout)
+	started := time.Now()
 	firstAttempt := true
 	for {
-		if !firstAttempt && !time.Now().Before(deadline) {
+		if !firstAttempt && time.Since(started) >= timeout {
 			return nil, ErrAcquireTimeout
 		}
 		wasFirstAttempt := firstAttempt
@@ -47,14 +47,14 @@ func Acquire(path string, timeout time.Duration) (*Lock, error) {
 			return nil, err
 		}
 		if locked {
-			if !wasFirstAttempt && !time.Now().Before(deadline) {
+			if !wasFirstAttempt && time.Since(started) >= timeout {
 				_ = file.Close()
 				return nil, ErrAcquireTimeout
 			}
 			return &Lock{file: file}, nil
 		}
 		_ = file.Close()
-		remaining := time.Until(deadline)
+		remaining := timeout - time.Since(started)
 		if remaining <= 0 {
 			return nil, ErrAcquireTimeout
 		}

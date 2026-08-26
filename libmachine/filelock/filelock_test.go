@@ -103,6 +103,12 @@ func TestAcquireRejectsNegativeTimeout(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidTimeout)
 }
 
+func TestAcquireAcceptsVeryLargeTimeout(t *testing.T) {
+	lock, err := Acquire(filepath.Join(t.TempDir(), "lock"), time.Duration(1<<63-1))
+	require.NoError(t, err)
+	require.NoError(t, lock.Unlock())
+}
+
 func TestAcquireMissingParent(t *testing.T) {
 	_, err := Acquire(filepath.Join(t.TempDir(), "missing", "lock"), time.Second)
 	assert.Error(t, err)
