@@ -45,53 +45,40 @@ func machineTypes(selections []flexSelection) []string {
 func TestPlacementHealthDisabledPreservesConfiguredOrder(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	d.FlexStockoutCooldown = 0
-
-	ordered := health.order(d, testSelections())
-
-	assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4-standard-2"}, machineTypes(ordered))
+	assert.Equal(t, machineTypes(testSelections()), machineTypes(health.order(d, testSelections())))
 	_, err := os.Stat(health.statePath)
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func TestPlacementHealthStockoutSkipsSelectionWhileHealthySelectionsRemain(t *testing.T) {
+func TestPlacementHealthCoolingSelectionsRemainAtBack(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	selections := testSelections()
 	require.NoError(t, health.recordStockout(d, selections[0]))
-
-	ordered := health.order(d, selections)
-
-	assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2"}, machineTypes(ordered))
+	assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2", "n4d-standard-2"}, machineTypes(health.order(d, selections)))
 }
 
-func TestPlacementHealthPreservesConfiguredOrderAmongEligibleSelections(t *testing.T) {
+func TestPlacementHealthPreservesOrderWithinPartitions(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	selections := testSelections()
 	require.NoError(t, health.recordStockout(d, selections[0]))
 	require.NoError(t, health.recordStockout(d, selections[2]))
-
-	ordered := health.order(d, selections)
-
-	assert.Equal(t, []string{"n2d-standard-2"}, machineTypes(ordered))
+	assert.Equal(t, []string{"n2d-standard-2", "n4d-standard-2", "n4-standard-2"}, machineTypes(health.order(d, selections)))
 }
 
-func TestPlacementHealthExpiredCooldownRestoresConfiguredOrder(t *testing.T) {
-	health, d, now := newTestPlacementHealth(t)
-	selections := testSelections()
-	for _, selection := range selections {
-		require.NoError(t, health.recordStockout(d, selection))
-	}
-	health.now = func() time.Time { return now.Add(61 * time.Second) }
-
-	ordered := health.order(d, selections)
-
-	assert.Equal(t, machineTypes(selections), machineTypes(ordered))
-}
-
-func TestPlacementHealthExpiredCooldownGrantsOneProbeAfterHealthySelections(t *testing.T) {
+func TestPlacementHealthPriorityProbeHolderAttemptsProbeFirst(t *testing.T) {
 	health, d, now := newTestPlacementHealth(t)
 	selections := testSelections()
 	require.NoError(t, health.recordStockout(d, selections[0]))
 	health.now = func() time.Time { return now.Add(61 * time.Second) }
+	assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4-standard-2"}, machineTypes(health.order(d, selections)))
+	assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2", "n4d-standard-2"}, machineTypes(newPlacementHealth(d, health.now).order(d, selections)))
+}
+
+func TestPlacementHealthOnlyOneConcurrentPriorityProbeHolderUsesConfiguredOrder(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	selections := testSelections()
+	require.NoError(t, health.recordStockout(d, selections[0]))
+	nowFn := func() time.Time { return now.Add(61 * time.Second) }
 
 	const workers = 8
 	orders := make(chan []string, workers)
@@ -100,23 +87,37 @@ func TestPlacementHealthExpiredCooldownGrantsOneProbeAfterHealthySelections(t *t
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			other := newPlacementHealth(d, health.now)
-			orders <- machineTypes(other.order(d, selections))
+			orders <- machineTypes(newPlacementHealth(d, nowFn).order(d, selections))
 		}()
 	}
 	wg.Wait()
 	close(orders)
-
 	probes := 0
 	for order := range orders {
-		if len(order) == 3 {
+		if len(order) > 0 && order[0] == "n4d-standard-2" {
 			probes++
-			assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2", "n4d-standard-2"}, order)
 		} else {
-			assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2"}, order)
+			assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2", "n4d-standard-2"}, order)
 		}
 	}
 	assert.Equal(t, 1, probes)
+}
+
+func TestPlacementHealthLowerRankedProbeIsAttemptedFirst(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	selections := testSelections()
+	require.NoError(t, health.recordStockout(d, selections[2]))
+	health.now = func() time.Time { return now.Add(61 * time.Second) }
+	assert.Equal(t, []string{"n4-standard-2", "n4d-standard-2", "n2d-standard-2"}, machineTypes(health.order(d, selections)))
+}
+
+func TestPlacementHealthZeroProbeLeaseDisablesPriorityProbe(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	d.FlexStockoutProbeLease = 0
+	selections := testSelections()
+	require.NoError(t, health.recordStockout(d, selections[0]))
+	health.now = func() time.Time { return now.Add(61 * time.Second) }
+	assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2", "n4d-standard-2"}, machineTypes(health.order(d, selections)))
 }
 
 func TestPlacementHealthAllCoolingUsesConfiguredOrder(t *testing.T) {
@@ -125,116 +126,187 @@ func TestPlacementHealthAllCoolingUsesConfiguredOrder(t *testing.T) {
 	for _, selection := range selections {
 		require.NoError(t, health.recordStockout(d, selection))
 	}
-
-	ordered := health.order(d, selections)
-
-	assert.Equal(t, machineTypes(selections), machineTypes(ordered))
+	assert.Equal(t, machineTypes(selections), machineTypes(health.order(d, selections)))
 }
 
-func TestPlacementHealthPlacementSuccessClearsCooldown(t *testing.T) {
+func TestPlacementHealthPlacementSuccessClearsCooldownWithoutCreatingHealthyEntry(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
-	selections := testSelections()
-	require.NoError(t, health.recordStockout(d, selections[0]))
-	require.NoError(t, health.recordPlacement(d, selections[0]))
-
-	ordered := health.order(d, selections)
-
-	assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4-standard-2"}, machineTypes(ordered))
+	selection := testSelections()[0]
+	require.NoError(t, health.recordPlacement(d, selection))
+	_, err := os.Stat(health.statePath)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, health.recordStockout(d, selection))
+	require.NoError(t, health.recordPlacement(d, selection))
+	assert.Equal(t, machineTypes(testSelections()), machineTypes(health.order(d, testSelections())))
 }
 
-func TestPlacementHealthCorruptStateFailsOpen(t *testing.T) {
+func TestPlacementHealthCorruptStateIsRebuiltOnUpdate(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
-	require.NoError(t, os.MkdirAll(filepath.Dir(health.statePath), 0700))
 	require.NoError(t, os.WriteFile(health.statePath, []byte("not-json"), 0600))
-
-	ordered := health.order(d, testSelections())
-
-	assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4-standard-2"}, machineTypes(ordered))
+	require.NoError(t, health.recordStockout(d, testSelections()[0]))
+	state, err := health.load()
+	require.NoError(t, err)
+	require.Len(t, state.Classes, 1)
 }
 
-func TestPlacementHealthUnknownVersionIsNotOverwritten(t *testing.T) {
+func TestPlacementHealthOversizedStateIsNotOverwritten(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
-	original := []byte(`{"version":2,"classes":{}}`)
+	original := make([]byte, placementHealthMaxFileSize+1)
 	require.NoError(t, os.WriteFile(health.statePath, original, 0600))
-
-	err := health.recordStockout(d, testSelections()[0])
-
-	require.ErrorContains(t, err, "unsupported placement health version")
-	actual, readErr := os.ReadFile(health.statePath)
-	require.NoError(t, readErr)
+	require.ErrorContains(t, health.recordStockout(d, testSelections()[0]), "exceeds")
+	actual, err := os.ReadFile(health.statePath)
+	require.NoError(t, err)
 	assert.Equal(t, original, actual)
 }
 
-func TestPlacementHealthOversizedStateFailsOpen(t *testing.T) {
+func TestPlacementHealthFutureVersionIsNotOverwritten(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
-	require.NoError(t, os.WriteFile(health.statePath, make([]byte, placementHealthMaxFileSize+1), 0600))
+	original := []byte(`{"version":999,"classes":[]}`)
+	require.NoError(t, os.WriteFile(health.statePath, original, 0600))
+	require.ErrorContains(t, health.recordStockout(d, testSelections()[0]), "unsupported placement health version")
+	actual, err := os.ReadFile(health.statePath)
+	require.NoError(t, err)
+	assert.Equal(t, original, actual)
+}
 
-	ordered := health.order(d, testSelections())
+func TestPlacementHealthFutureVersionWithDifferentSchemaIsNotOverwritten(t *testing.T) {
+	health, d, _ := newTestPlacementHealth(t)
+	original := []byte(`{"version":999,"classes":{}}`)
+	require.NoError(t, os.WriteFile(health.statePath, original, 0600))
 
-	assert.Equal(t, machineTypes(testSelections()), machineTypes(ordered))
+	require.ErrorContains(t, health.recordStockout(d, testSelections()[0]), "unsupported placement health version")
+	actual, err := os.ReadFile(health.statePath)
+	require.NoError(t, err)
+	assert.Equal(t, original, actual)
+}
+
+func TestPlacementHealthLegacyV1StateIsRebuilt(t *testing.T) {
+	health, d, _ := newTestPlacementHealth(t)
+	require.NoError(t, os.WriteFile(health.statePath, []byte(`{"version":1,"classes":{"opaque":{}}}`), 0600))
+	require.NoError(t, health.recordStockout(d, testSelections()[0]))
+	state, err := health.load()
+	require.NoError(t, err)
+	assert.Equal(t, placementHealthVersion, state.Version)
+	require.Len(t, state.Classes, 1)
+}
+
+func TestPlacementHealthStateIsReadable(t *testing.T) {
+	health, d, _ := newTestPlacementHealth(t)
+	require.NoError(t, health.recordStockout(d, testSelections()[0]))
+	data, err := os.ReadFile(health.statePath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"machine_type": "n4d-standard-2"`)
+	assert.NotContains(t, string(data), "sha256")
+}
+
+func TestPlacementHealthPrunesOldEntriesAndTempFiles(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	old := placementClassHealth{Class: health.selectionClass(d, testSelections()[0]), LastStockout: now.Add(-25 * time.Hour)}
+	state := &placementHealthFile{Version: placementHealthVersion, Classes: []placementClassHealth{old}}
+	require.NoError(t, health.save(state))
+	tmp := filepath.Join(filepath.Dir(health.statePath), placementHealthFilename+".tmp-orphan")
+	require.NoError(t, os.WriteFile(tmp, []byte("orphan"), 0600))
+	require.NoError(t, os.Chtimes(tmp, now.Add(-25*time.Hour), now.Add(-25*time.Hour)))
+	require.NoError(t, health.recordStockout(d, testSelections()[1]))
+	loaded, err := health.load()
+	require.NoError(t, err)
+	require.Len(t, loaded.Classes, 1)
+	assert.Equal(t, "n2d-standard-2", loaded.Classes[0].Class.MachineType)
+	_, err = os.Stat(tmp)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestPlacementHealthKeepsActiveCooldownOlderThanPruneAge(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	entry := placementClassHealth{
+		Class:         health.selectionClass(d, testSelections()[0]),
+		LastStockout:  now.Add(-25 * time.Hour),
+		CooldownUntil: now.Add(time.Hour),
+	}
+	state := &placementHealthFile{Version: placementHealthVersion, Classes: []placementClassHealth{entry}}
+	assert.False(t, health.prune(state, now))
+	assert.Len(t, state.Classes, 1)
+}
+
+func TestPlacementHealthClassBoundDoesNotEvictActiveEntries(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	state := newPlacementHealthFile()
+	for i := 0; i < placementHealthMaxClasses+10; i++ {
+		state.Classes = append(state.Classes, placementClassHealth{
+			Class:         health.selectionClass(d, flexSelection{MachineType: fmt.Sprintf("type-%d", i)}),
+			LastStockout:  now,
+			CooldownUntil: now.Add(time.Hour),
+		})
+	}
+	assert.False(t, health.prune(state, now), "active entries are not eligible for hard-cap eviction")
+	assert.Len(t, state.Classes, placementHealthMaxClasses+10)
+}
+
+func TestPlacementHealthDoesNotEvictActiveClassesWhileRecording(t *testing.T) {
+	health, d, _ := newTestPlacementHealth(t)
+	for i := 0; i < placementHealthMaxClasses+10; i++ {
+		selection := flexSelection{MachineType: fmt.Sprintf("type-%d", i)}
+		require.NoError(t, health.recordStockout(d, selection))
+	}
+	state, err := health.load()
+	require.NoError(t, err)
+	assert.Len(t, state.Classes, placementHealthMaxClasses+10)
 }
 
 func TestPlacementHealthConcurrentStockoutsAreNotLost(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
-	selections := testSelections()
-
 	var wg sync.WaitGroup
-	for _, selection := range selections {
+	for _, selection := range testSelections() {
 		selection := selection
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			require.NoError(t, health.recordStockout(d, selection))
-		}()
+		go func() { defer wg.Done(); require.NoError(t, health.recordStockout(d, selection)) }()
 	}
 	wg.Wait()
-
 	state, err := health.load()
 	require.NoError(t, err)
-	assert.Len(t, state.Classes, len(selections))
+	assert.Len(t, state.Classes, len(testSelections()))
 }
 
 func TestPlacementHealthAtomicWritesRemainReadable(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
-	selections := testSelections()
-	stop := make(chan struct{})
+	stop, done := make(chan struct{}), make(chan struct{})
 	errs := make(chan error, 1)
-
 	go func() {
+		defer close(done)
 		for {
 			select {
 			case <-stop:
 				return
 			default:
-				data, err := os.ReadFile(health.statePath)
-				if errors.Is(err, os.ErrNotExist) {
-					continue
+			}
+			data, err := os.ReadFile(health.statePath)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				select {
+				case errs <- err:
+				default:
 				}
-				if err != nil {
-					select {
-					case errs <- err:
-					default:
-					}
-					return
+				return
+			}
+			var state placementHealthFile
+			if err := json.Unmarshal(data, &state); err != nil || state.Version != placementHealthVersion {
+				select {
+				case errs <- fmt.Errorf("invalid state: %w", err):
+				default:
 				}
-				var state placementHealthFile
-				if err := json.Unmarshal(data, &state); err != nil || state.Version != placementHealthVersion {
-					select {
-					case errs <- fmt.Errorf("invalid state: %w", err):
-					default:
-					}
-					return
-				}
+				return
 			}
 		}
 	}()
-
 	for i := 0; i < 50; i++ {
-		selection := selections[i%len(selections)]
+		selection := testSelections()[i%len(testSelections())]
 		require.NoError(t, health.recordStockout(d, selection))
 		require.NoError(t, health.recordPlacement(d, selection))
 	}
 	close(stop)
+	<-done
 	select {
 	case err := <-errs:
 		require.NoError(t, err)
@@ -242,41 +314,21 @@ func TestPlacementHealthAtomicWritesRemainReadable(t *testing.T) {
 	}
 }
 
-func TestPlacementHealthKeySeparatesPlacementConfiguration(t *testing.T) {
-	health, d, _ := newTestPlacementHealth(t)
-	selection := testSelections()[0]
-	key := health.selectionKey(d, selection)
-
-	d.Project = "other-project"
-	assert.NotEqual(t, key, health.selectionKey(d, selection))
-	d.Project = "project"
-	d.LocationZones = []string{"us-east1-b"}
-	assert.NotEqual(t, key, health.selectionKey(d, selection))
-	selection.DiskIops++
-	assert.NotEqual(t, key, health.selectionKey(d, selection))
-}
-
-func TestPlacementHealthKeyUsesEffectiveDriverDefaults(t *testing.T) {
+func TestPlacementHealthClassUsesEffectiveConfiguration(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	selection := flexSelection{MachineType: "n2d-standard-2"}
 	d.DiskType = "pd-balanced"
-	key := health.selectionKey(d, selection)
-
+	class := health.selectionClass(d, selection)
 	d.DiskType = "hyperdisk-balanced"
-	assert.NotEqual(t, key, health.selectionKey(d, selection))
-	d.DiskType = "pd-balanced"
-	d.Accelerator = "count=1,type=nvidia-l4"
-	assert.NotEqual(t, key, health.selectionKey(d, selection))
-	d.Accelerator = ""
-	d.MinCPUPlatform = "AMD Milan"
-	assert.NotEqual(t, key, health.selectionKey(d, selection))
+	assert.False(t, samePlacementClass(class, health.selectionClass(d, selection)))
+	d.DiskType, d.Accelerator = "pd-balanced", "count=1,type=nvidia-l4"
+	assert.False(t, samePlacementClass(class, health.selectionClass(d, selection)))
 }
 
 func TestPlacementHealthUnavailableStoreDoesNotWriteState(t *testing.T) {
 	d := &Driver{FlexStockoutCooldown: time.Minute}
 	health := newPlacementHealth(d, time.Now)
 	selection := flexSelection{MachineType: "n2d-standard-2"}
-
 	assert.Equal(t, []flexSelection{selection}, health.order(d, []flexSelection{selection}))
 	require.NoError(t, health.recordStockout(d, selection))
 	require.NoError(t, health.recordPlacement(d, selection))

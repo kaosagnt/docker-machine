@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/docker/machine/libmachine/auth"
+	"github.com/docker/machine/libmachine/filelock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -145,7 +146,7 @@ func TestBootstrapCertificates_StaleLock(t *testing.T) {
 	a := newTestAuthOptions(t)
 
 	require.NoError(t, os.MkdirAll(a.CertDir, 0700))
-	lock, err := newFileLockWithTimeout(filepath.Join(a.CertDir, bootstrapLockFile), 1*time.Second)
+	lock, err := filelock.Acquire(filepath.Join(a.CertDir, bootstrapLockFile), 1*time.Second)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, lock.Unlock())

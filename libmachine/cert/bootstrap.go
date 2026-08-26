@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/docker/machine/libmachine/auth"
+	"github.com/docker/machine/libmachine/filelock"
 	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/mcnutils"
 )
@@ -20,31 +21,14 @@ import (
 // invocations for the full gitlab-runner subprocess timeout (currently 1h).
 const bootstrapLockDefaultTimeout = 15 * time.Second
 
-// errFileLockAcquiring is returned by newFileLockWithTimeout when the deadline
-// elapses before the lock can be acquired.
-var errFileLockAcquiring = errors.New("timed out awaiting for file lock acquire")
+// errFileLockAcquiring aliases the shared file-lock timeout for compatibility
+// with the existing certificate-bootstrap tests.
+var errFileLockAcquiring = filelock.ErrAcquireTimeout
 
 // bootstrapLockFile is the filename used inside authOptions.CertDir to serialise
 // concurrent certificate bootstrap operations across processes. See
 // BootstrapCertificates for the race it defends against.
 const bootstrapLockFile = ".bootstrap.lock"
-
-// fileLock is an exclusive, blocking, cross-process advisory lock backed by a
-// file. It is used to serialise concurrent invocations of
-// BootstrapCertificates so that simultaneous `docker-machine create`
-// subprocesses do not race on CA/client certificate generation. The
-// platform-specific acquisition and release primitives live in
-// flock_unix.go and flock_windows.go.
-type fileLock struct {
-	f *os.File
-}
-
-// Unlock releases the lock. Closing the underlying file descriptor is
-// sufficient on every supported platform: the kernel releases any lock
-// held on the last close of the open file description / handle.
-func (l *fileLock) Unlock() error {
-	return l.f.Close()
-}
 
 func createCACert(authOptions *auth.Options, caOrg string, bits int) error {
 	caCertPath := authOptions.CaCertPath
@@ -149,7 +133,7 @@ func bootstrapCertificatesWithLockTimeout(authOptions *auth.Options, lockTimeout
 	// enable via `--tls-bootstrap-lock` on `docker-machine create` or via
 	// the MACHINE_TLS_BOOTSTRAP_LOCK environment variable.
 	if authOptions.BootstrapLock {
-		lock, err := newFileLockWithTimeout(filepath.Join(certDir, bootstrapLockFile), lockTimeout)
+		lock, err := filelock.Acquire(filepath.Join(certDir, bootstrapLockFile), lockTimeout)
 		if err != nil {
 			return fmt.Errorf("acquiring cert bootstrap lock: %w", err)
 		}
@@ -197,31 +181,4 @@ func bootstrapCertificatesWithLockTimeout(authOptions *auth.Options, lockTimeout
 	}
 
 	return nil
-}
-
-// newFileLockWithTimeout opens (creating if necessary) the file at path and
-// tries to acquire an exclusive lock on it, retrying until timeout elapses.
-// On timeout it returns errFileLockAcquiring.
-func newFileLockWithTimeout(path string, timeout time.Duration) (*fileLock, error) {
-	deadline := time.Now().Add(timeout)
-	backoff := 10 * time.Millisecond
-
-	for {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
-		if err != nil {
-			return nil, err
-		}
-
-		if lock := flock(f); lock != nil {
-			return lock, nil
-		}
-
-		f.Close()
-
-		if time.Now().After(deadline) {
-			return nil, errFileLockAcquiring
-		}
-
-		time.Sleep(backoff)
-	}
 }

@@ -62,6 +62,10 @@ func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 			probeLease: "0s",
 			expectErr:  "must be > 0",
 		},
+		"negative probe lease is rejected when disabled": {
+			probeLease: "-1s",
+			expectErr:  "must be >= 0",
+		},
 	}
 
 	for name, tt := range tests {

@@ -87,8 +87,9 @@ type Driver struct {
 	// FlexStockoutCooldown temporarily deprioritizes a flex selection after a
 	// recognized capacity failure. Zero preserves the configured order.
 	FlexStockoutCooldown time.Duration
-	// FlexStockoutProbeLease limits recovery probes across concurrent
-	// docker-machine command processes sharing StorePath.
+	// FlexStockoutProbeLease limits priority recovery probes across concurrent
+	// docker-machine command processes sharing StorePath. Other creates may
+	// still reach the selection after exhausting non-cooling alternatives.
 	FlexStockoutProbeLease time.Duration
 
 	// LocationZones constrains zone selection. Each entry is
@@ -453,7 +454,10 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	if err != nil {
 		return fmt.Errorf("invalid google-flex-stockout-probe-lease: %w", err)
 	}
-	if d.FlexStockoutCooldown > 0 && d.FlexStockoutProbeLease <= 0 {
+	if d.FlexStockoutProbeLease < 0 {
+		return fmt.Errorf("google-flex-stockout-probe-lease must be >= 0, got %s", d.FlexStockoutProbeLease)
+	}
+	if d.FlexStockoutCooldown > 0 && d.FlexStockoutProbeLease == 0 {
 		return fmt.Errorf("google-flex-stockout-probe-lease must be > 0 when stockout cooldown is enabled, got %s", d.FlexStockoutProbeLease)
 	}
 
