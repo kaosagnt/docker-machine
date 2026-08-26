@@ -23,6 +23,9 @@ func (l *Lock) Unlock() error {
 }
 
 func Acquire(path string, timeout time.Duration) (*Lock, error) {
+	// timeout bounds retries caused by lock contention. The initial OpenFile and
+	// non-blocking lock attempt always run, including at timeout zero; filesystem
+	// syscall latency itself is outside this advisory-lock timeout contract.
 	if timeout < 0 {
 		return nil, ErrInvalidTimeout
 	}

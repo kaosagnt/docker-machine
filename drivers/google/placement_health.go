@@ -148,6 +148,9 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 	}
 
 	if len(healthy) == 0 {
+		// The lease limits priority recovery probes while another class is
+		// healthy. When every class is cooling, preserve one bounded exhaustive
+		// pass so capacity discovery cannot stop completely.
 		return append([]flexSelection(nil), configured...)
 	}
 
