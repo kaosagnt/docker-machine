@@ -347,28 +347,14 @@ func (h *placementHealth) prune(state *placementHealthFile, now time.Time) bool 
 	}
 	changed := len(kept) != len(state.Classes)
 	if len(kept) > placementHealthMaxClasses {
-		active := make([]placementClassHealth, 0, len(kept))
-		inactive := make([]placementClassHealth, 0, len(kept))
-		for _, entry := range kept {
-			if now.Before(entry.CooldownUntil) || now.Before(entry.ProbeUntil) {
-				active = append(active, entry)
-			} else {
-				inactive = append(inactive, entry)
-			}
-		}
-		sort.SliceStable(inactive, func(i, j int) bool {
-			return placementHealthLastActivity(inactive[i]).After(placementHealthLastActivity(inactive[j]))
+		// The state file is an optimization, not an authority. Keep a hard bound
+		// so continuously changing configurations cannot disable the feature by
+		// exceeding its own read limit. The most recently active entries win.
+		sort.SliceStable(kept, func(i, j int) bool {
+			return placementHealthLastActivity(kept[i]).After(placementHealthLastActivity(kept[j]))
 		})
-		available := placementHealthMaxClasses - len(active)
-		if available < 0 {
-			available = 0
-		}
-		if len(inactive) > available {
-			inactive = inactive[:available]
-		}
-		bounded := append(active, inactive...)
-		changed = changed || len(bounded) != len(kept)
-		kept = bounded
+		kept = kept[:placementHealthMaxClasses]
+		changed = true
 	}
 	state.Classes = kept
 	return changed

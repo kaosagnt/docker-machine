@@ -228,7 +228,7 @@ func TestPlacementHealthKeepsActiveCooldownOlderThanPruneAge(t *testing.T) {
 	assert.Len(t, state.Classes, 1)
 }
 
-func TestPlacementHealthClassBoundDoesNotEvictActiveEntries(t *testing.T) {
+func TestPlacementHealthClassBoundKeepsMostRecentActiveEntries(t *testing.T) {
 	health, d, now := newTestPlacementHealth(t)
 	state := newPlacementHealthFile()
 	for i := 0; i < placementHealthMaxClasses+10; i++ {
@@ -238,11 +238,11 @@ func TestPlacementHealthClassBoundDoesNotEvictActiveEntries(t *testing.T) {
 			CooldownUntil: now.Add(time.Hour),
 		})
 	}
-	assert.False(t, health.prune(state, now), "active entries are not eligible for hard-cap eviction")
-	assert.Len(t, state.Classes, placementHealthMaxClasses+10)
+	assert.True(t, health.prune(state, now))
+	assert.Len(t, state.Classes, placementHealthMaxClasses)
 }
 
-func TestPlacementHealthDoesNotEvictActiveClassesWhileRecording(t *testing.T) {
+func TestPlacementHealthBoundsClassesWhileRecording(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	for i := 0; i < placementHealthMaxClasses+10; i++ {
 		selection := flexSelection{MachineType: fmt.Sprintf("type-%d", i)}
@@ -250,7 +250,7 @@ func TestPlacementHealthDoesNotEvictActiveClassesWhileRecording(t *testing.T) {
 	}
 	state, err := health.load()
 	require.NoError(t, err)
-	assert.Len(t, state.Classes, placementHealthMaxClasses+10)
+	assert.Len(t, state.Classes, placementHealthMaxClasses)
 }
 
 func TestPlacementHealthConcurrentStockoutsAreNotLost(t *testing.T) {
