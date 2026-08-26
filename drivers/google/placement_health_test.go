@@ -312,6 +312,21 @@ func TestPlacementHealthLatestCompletedOutcomeWins(t *testing.T) {
 	assert.Equal(t, now.Add(2*time.Second), state.Classes[0].LastPlaced)
 }
 
+func TestPlacementHealthReleaseProbeClearsOnlyOwnerLease(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	selection := testSelections()[0]
+	require.NoError(t, health.recordStockout(d, selection))
+	health.now = func() time.Time { return now.Add(61 * time.Second) }
+	_ = health.order(d, testSelections())
+	require.NoError(t, health.releaseProbe(d, selection))
+
+	state, err := health.load()
+	require.NoError(t, err)
+	require.Len(t, state.Classes, 1)
+	assert.True(t, state.Classes[0].ProbeUntil.IsZero())
+	assert.Empty(t, state.Classes[0].ProbeOwner)
+}
+
 func TestPlacementHealthAtomicWritesRemainReadable(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	stop, done := make(chan struct{}), make(chan struct{})

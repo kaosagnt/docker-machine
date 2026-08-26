@@ -164,6 +164,9 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			return c.finishPostCreate(d)
 		}
 		if !retryable {
+			if err := health.releaseProbe(d, sel); err != nil {
+				log.Warnf("Could not release bulkInsert placement probe: %v", err)
+			}
 			return attemptErr
 		}
 		log.Warnf("bulkInsert selection %d/%d (%s) hit stockout-class failure, falling through: %v", i+1, len(selections), sel.MachineType, attemptErr)

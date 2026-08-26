@@ -243,6 +243,23 @@ func (h *placementHealth) recordPlacementAt(d *Driver, selection flexSelection, 
 	})
 }
 
+func (h *placementHealth) releaseProbe(d *Driver, selection flexSelection) error {
+	if d.FlexStockoutCooldown <= 0 || !h.available {
+		return nil
+	}
+	return h.update(func(state *placementHealthFile, _ time.Time) bool {
+		index := findPlacementClass(state, h.selectionClass(d, selection))
+		if index < 0 || state.Classes[index].ProbeOwner != d.MachineName {
+			return false
+		}
+		entry := state.Classes[index]
+		entry.ProbeUntil = time.Time{}
+		entry.ProbeOwner = ""
+		state.Classes[index] = entry
+		return true
+	})
+}
+
 func placementHealthLatestObservation(entry placementClassHealth) time.Time {
 	if entry.LastPlaced.After(entry.LastStockout) {
 		return entry.LastPlaced
