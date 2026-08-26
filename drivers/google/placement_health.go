@@ -123,7 +123,11 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 		log.Warnf("Could not lock bulkInsert placement health; using configured order: %v", err)
 		return append([]flexSelection(nil), configured...)
 	}
-	defer unlock()
+	defer func() {
+		if err := unlock(); err != nil {
+			log.Warnf("Could not unlock bulkInsert placement health: %v", err)
+		}
+	}()
 	state, err := h.load()
 	if err != nil {
 		log.Warnf("Could not read bulkInsert placement health; using configured order: %v", err)
@@ -146,8 +150,8 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 		}
 		entry := state.Classes[index]
 		lastObservation := placementHealthLatestObservation(entry)
-		if (!lastObservation.IsZero() && now.Sub(lastObservation) > placementHealthMaxAge && !now.Before(entry.CooldownUntil)) ||
-			lastObservation.After(now) {
+		if lastObservation.After(now) ||
+			(!lastObservation.IsZero() && now.Sub(lastObservation) > placementHealthMaxAge && !now.Before(entry.CooldownUntil)) {
 			healthy = append(healthy, selection)
 			continue
 		}
@@ -288,7 +292,11 @@ func (h *placementHealth) update(change func(*placementHealthFile, time.Time) bo
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer func() {
+		if err := unlock(); err != nil {
+			log.Warnf("Could not unlock bulkInsert placement health: %v", err)
+		}
+	}()
 	state, err := h.load()
 	if err != nil {
 		var versionErr *placementHealthVersionError
