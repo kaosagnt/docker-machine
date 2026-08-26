@@ -178,6 +178,10 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 }
 
 func (h *placementHealth) recordStockout(d *Driver, selection flexSelection) error {
+	return h.recordStockoutAt(d, selection, h.now())
+}
+
+func (h *placementHealth) recordStockoutAt(d *Driver, selection flexSelection, observedAt time.Time) error {
 	if d.FlexStockoutCooldown <= 0 || !h.available {
 		return nil
 	}
@@ -187,11 +191,14 @@ func (h *placementHealth) recordStockout(d *Driver, selection flexSelection) err
 		entry := placementClassHealth{Class: class}
 		if index >= 0 {
 			entry = state.Classes[index]
+			if observedAt.Before(placementHealthLatestObservation(entry)) {
+				return false
+			}
 		}
-		entry.CooldownUntil = now.Add(d.FlexStockoutCooldown)
+		entry.CooldownUntil = observedAt.Add(d.FlexStockoutCooldown)
 		entry.ProbeUntil = time.Time{}
 		entry.ProbeOwner = ""
-		entry.LastStockout = now
+		entry.LastStockout = observedAt
 		if index >= 0 {
 			state.Classes[index] = entry
 		} else {
@@ -202,6 +209,10 @@ func (h *placementHealth) recordStockout(d *Driver, selection flexSelection) err
 }
 
 func (h *placementHealth) recordPlacement(d *Driver, selection flexSelection) error {
+	return h.recordPlacementAt(d, selection, h.now())
+}
+
+func (h *placementHealth) recordPlacementAt(d *Driver, selection flexSelection, observedAt time.Time) error {
 	if d.FlexStockoutCooldown <= 0 || !h.available {
 		return nil
 	}
@@ -211,16 +222,26 @@ func (h *placementHealth) recordPlacement(d *Driver, selection flexSelection) er
 			return false
 		}
 		entry := state.Classes[index]
+		if observedAt.Before(placementHealthLatestObservation(entry)) {
+			return false
+		}
 		if entry.CooldownUntil.IsZero() && entry.ProbeUntil.IsZero() {
 			return false
 		}
 		entry.CooldownUntil = time.Time{}
 		entry.ProbeUntil = time.Time{}
 		entry.ProbeOwner = ""
-		entry.LastPlaced = now
+		entry.LastPlaced = observedAt
 		state.Classes[index] = entry
 		return true
 	})
+}
+
+func placementHealthLatestObservation(entry placementClassHealth) time.Time {
+	if entry.LastPlaced.After(entry.LastStockout) {
+		return entry.LastPlaced
+	}
+	return entry.LastStockout
 }
 
 func (h *placementHealth) update(change func(*placementHealthFile, time.Time) bool) error {

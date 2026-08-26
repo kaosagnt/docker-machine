@@ -155,9 +155,10 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 	stockoutErrs := make([]error, 0, len(selections))
 	for i, sel := range selections {
 		log.Infof("bulkInsert attempt %d/%d: machine-type=%q disk-type=%q", i+1, len(selections), sel.MachineType, sel.DiskType)
+		attemptStarted := time.Now()
 		retryable, attemptErr := c.attemptBulkInsertForSelection(d, sel)
 		if attemptErr == nil {
-			if err := health.recordPlacement(d, sel); err != nil {
+			if err := health.recordPlacementAt(d, sel, attemptStarted); err != nil {
 				log.Warnf("Could not record successful bulkInsert placement health: %v", err)
 			}
 			return c.finishPostCreate(d)
@@ -166,7 +167,7 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			return attemptErr
 		}
 		log.Warnf("bulkInsert selection %d/%d (%s) hit stockout-class failure, falling through: %v", i+1, len(selections), sel.MachineType, attemptErr)
-		if err := health.recordStockout(d, sel); err != nil {
+		if err := health.recordStockoutAt(d, sel, attemptStarted); err != nil {
 			log.Warnf("Could not record bulkInsert stockout health: %v", err)
 		}
 		stockoutErrs = append(stockoutErrs, fmt.Errorf("selection %d/%d (machine-type=%s): %w", i+1, len(selections), sel.MachineType, attemptErr))

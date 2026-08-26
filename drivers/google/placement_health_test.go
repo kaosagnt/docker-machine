@@ -276,6 +276,20 @@ func TestPlacementHealthConcurrentStockoutsAreNotLost(t *testing.T) {
 	assert.Len(t, state.Classes, len(testSelections()))
 }
 
+func TestPlacementHealthNewestAttemptObservationWins(t *testing.T) {
+	health, d, now := newTestPlacementHealth(t)
+	selection := testSelections()[0]
+	require.NoError(t, health.recordStockoutAt(d, selection, now))
+	require.NoError(t, health.recordPlacementAt(d, selection, now.Add(time.Second)))
+	require.NoError(t, health.recordStockoutAt(d, selection, now.Add(-time.Second)))
+
+	state, err := health.load()
+	require.NoError(t, err)
+	require.Len(t, state.Classes, 1)
+	assert.True(t, state.Classes[0].CooldownUntil.IsZero())
+	assert.Equal(t, now.Add(time.Second), state.Classes[0].LastPlaced)
+}
+
 func TestPlacementHealthAtomicWritesRemainReadable(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	stop, done := make(chan struct{}), make(chan struct{})
