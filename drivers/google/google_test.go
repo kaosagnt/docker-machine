@@ -66,6 +66,10 @@ func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 			probeLease: "-1s",
 			expectErr:  "must be >= 0",
 		},
+		"probe lease override requires bulkInsert": {
+			probeLease: "6m",
+			expectErr:  "requires --google-bulk-insert",
+		},
 		"probe lease must cover operation timeout": {
 			cooldown:   "2m",
 			probeLease: "90s",

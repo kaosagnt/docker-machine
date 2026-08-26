@@ -183,7 +183,8 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 			ordered = append(ordered, selection)
 		}
 		for i, selection := range cooling {
-			if coolingPositions[i] != probePosition {
+			if coolingPositions[i] != probePosition &&
+				!samePlacementClass(h.selectionClass(d, selection), state.Classes[probeClassPosition].Class) {
 				ordered = append(ordered, selection)
 			}
 		}

@@ -120,13 +120,13 @@ func TestPlacementHealthProbeRemainderKeepsHealthyBeforeCooling(t *testing.T) {
 	assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4-standard-2"}, machineTypes(health.order(d, selections)))
 }
 
-func TestPlacementHealthProbePreservesDuplicateSelectionOccurrences(t *testing.T) {
+func TestPlacementHealthProbeSuppressesDuplicateClassOccurrences(t *testing.T) {
 	health, d, now := newTestPlacementHealth(t)
 	selection := testSelections()[0]
 	selections := []flexSelection{selection, selection, testSelections()[1]}
 	require.NoError(t, health.recordStockout(d, selection))
 	health.now = func() time.Time { return now.Add(61 * time.Second) }
-	assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4d-standard-2"}, machineTypes(health.order(d, selections)))
+	assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2"}, machineTypes(health.order(d, selections)))
 }
 
 func TestPlacementHealthZeroProbeLeaseDisablesPriorityProbe(t *testing.T) {

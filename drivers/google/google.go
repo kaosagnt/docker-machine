@@ -507,6 +507,9 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	if !d.BulkInsert && d.FlexStockoutCooldown > 0 {
 		return errors.New("--google-flex-stockout-cooldown requires --google-bulk-insert")
 	}
+	if !d.BulkInsert && d.FlexStockoutProbeLease != 5*time.Minute {
+		return errors.New("--google-flex-stockout-probe-lease requires --google-bulk-insert")
+	}
 
 	backoffRandomizationFactor, err := strconv.ParseFloat(flags.String("google-operation-backoff-randomization-factor"), 64)
 	if err != nil {
