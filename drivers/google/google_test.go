@@ -33,12 +33,12 @@ func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 		expectedProbe time.Duration
 		expectErr     string
 	}{
-		"disabled by default": {expectedProbe: 5 * time.Minute},
+		"disabled by default": {expectedProbe: defaultFlexStockoutProbeLease},
 		"durations are stored": {
 			cooldown:      "2m",
 			probeLease:    "5m",
 			expected:      2 * time.Minute,
-			expectedProbe: 5 * time.Minute,
+			expectedProbe: defaultFlexStockoutProbeLease,
 		},
 		"invalid cooldown is rejected": {
 			cooldown:  "soon",

@@ -113,19 +113,20 @@ type Driver struct {
 }
 
 const (
-	defaultZone              = "us-central1-a"
-	defaultUser              = "ubuntu"
-	defaultMachineType       = "n1-standard-1"
-	defaultImageName         = "ubuntu-os-cloud/global/images/ubuntu-2204-jammy-v20250815"
-	defaultServiceAccount    = "default"
-	defaultScopes            = "https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
-	defaultDiskType          = "pd-standard"
-	defaultDiskSize          = 10
-	defaultNetwork           = "default"
-	defaultSubnetwork        = ""
-	defaultMinCPUPlatform    = ""
-	defaultAccelerator       = ""
-	defaultMaintenancePolicy = ""
+	defaultZone                   = "us-central1-a"
+	defaultUser                   = "ubuntu"
+	defaultMachineType            = "n1-standard-1"
+	defaultImageName              = "ubuntu-os-cloud/global/images/ubuntu-2204-jammy-v20250815"
+	defaultServiceAccount         = "default"
+	defaultScopes                 = "https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
+	defaultDiskType               = "pd-standard"
+	defaultDiskSize               = 10
+	defaultNetwork                = "default"
+	defaultSubnetwork             = ""
+	defaultMinCPUPlatform         = ""
+	defaultAccelerator            = ""
+	defaultMaintenancePolicy      = ""
+	defaultFlexStockoutProbeLease = 5 * time.Minute
 
 	defaultGoogleOperationBackoffInitialInterval     = 1
 	defaultGoogleOperationBackoffRandomizationFactor = "0.5"
@@ -338,7 +339,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Name:   "google-flex-stockout-probe-lease",
 			Usage:  "Lease duration that permits one process to probe a flex selection after its stockout cooldown expires.",
 			EnvVar: "GOOGLE_FLEX_STOCKOUT_PROBE_LEASE",
-			Value:  "5m",
+			Value:  defaultFlexStockoutProbeLease.String(),
 		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-location-zone",
@@ -507,7 +508,7 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	if !d.BulkInsert && d.FlexStockoutCooldown > 0 {
 		return errors.New("--google-flex-stockout-cooldown requires --google-bulk-insert")
 	}
-	if !d.BulkInsert && d.FlexStockoutProbeLease != 5*time.Minute {
+	if !d.BulkInsert && d.FlexStockoutProbeLease != defaultFlexStockoutProbeLease {
 		return errors.New("--google-flex-stockout-probe-lease requires --google-bulk-insert")
 	}
 

@@ -30,8 +30,28 @@ func newTestPlacementHealth(t *testing.T) (*placementHealth, *Driver, time.Time)
 	d.Region = "us-east1"
 	d.LocationZones = []string{"us-east1-b", "us-east1-c", "us-east1-d"}
 	d.FlexStockoutCooldown = time.Minute
-	d.FlexStockoutProbeLease = 5 * time.Minute
+	d.FlexStockoutProbeLease = defaultFlexStockoutProbeLease
 	return newPlacementHealth(d, func() time.Time { return now }), d, now
+}
+
+func TestPlacementHealthStateIsSharedAcrossMachineNames(t *testing.T) {
+	storePath := t.TempDir()
+	firstDriver := NewDriver("runner-1", storePath)
+	secondDriver := NewDriver("runner-2", storePath)
+	for _, driver := range []*Driver{firstDriver, secondDriver} {
+		driver.Project = "project"
+		driver.Region = "us-east1"
+		driver.FlexStockoutCooldown = time.Minute
+		driver.FlexStockoutProbeLease = defaultFlexStockoutProbeLease
+	}
+	first := newPlacementHealth(firstDriver, time.Now)
+	second := newPlacementHealth(secondDriver, time.Now)
+	selections := testSelections()
+
+	assert.Equal(t, filepath.Join(storePath, placementHealthFilename), first.statePath)
+	assert.Equal(t, first.statePath, second.statePath)
+	require.NoError(t, first.recordStockout(firstDriver, selections[0]))
+	assert.Equal(t, []string{"n2d-standard-2", "n4-standard-2", "n4d-standard-2"}, machineTypes(second.order(secondDriver, selections)))
 }
 
 func machineTypes(selections []flexSelection) []string {
