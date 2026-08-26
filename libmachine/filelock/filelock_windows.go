@@ -3,20 +3,28 @@
 package filelock
 
 import (
+	"errors"
 	"os"
 
 	"golang.org/x/sys/windows"
 )
 
-func tryLock(file *os.File) bool {
+func tryLock(file *os.File) (bool, error) {
 	if file == nil {
-		return false
+		return false, os.ErrInvalid
 	}
-	return windows.LockFileEx(
+	err := windows.LockFileEx(
 		windows.Handle(file.Fd()),
 		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
 		0,
 		1, 0,
 		new(windows.Overlapped),
-	) == nil
+	)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
+		return false, nil
+	}
+	return false, err
 }

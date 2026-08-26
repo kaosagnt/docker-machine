@@ -18,12 +18,26 @@ func (l *Lock) Unlock() error {
 
 func Acquire(path string, timeout time.Duration) (*Lock, error) {
 	deadline := time.Now().Add(timeout)
+	firstAttempt := true
 	for {
+		if !firstAttempt && !time.Now().Before(deadline) {
+			return nil, ErrAcquireTimeout
+		}
+		firstAttempt = false
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 		if err != nil {
 			return nil, err
 		}
-		if tryLock(file) {
+		locked, err := tryLock(file)
+		if err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		if locked {
+			if time.Now().After(deadline) {
+				_ = file.Close()
+				return nil, ErrAcquireTimeout
+			}
 			return &Lock{file: file}, nil
 		}
 		_ = file.Close()
