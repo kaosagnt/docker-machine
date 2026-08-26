@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/docker/machine/libmachine/log"
@@ -50,18 +51,22 @@ type placementHealthFile struct {
 }
 
 type placementHealth struct {
-	statePath string
-	lockPath  string
-	available bool
-	now       func() time.Time
+	statePath  string
+	lockPath   string
+	available  bool
+	now        func() time.Time
+	probeOwner string
 }
+
+var placementHealthOwnerSequence atomic.Uint64
 
 func newPlacementHealth(d *Driver, now func() time.Time) *placementHealth {
 	if d.BaseDriver == nil || d.StorePath == "" {
 		return &placementHealth{now: now}
 	}
 	statePath := filepath.Join(d.StorePath, placementHealthFilename)
-	return &placementHealth{statePath: statePath, lockPath: statePath + placementHealthLockSuffix, available: true, now: now}
+	owner := fmt.Sprintf("%s:%d:%d", d.MachineName, os.Getpid(), placementHealthOwnerSequence.Add(1))
+	return &placementHealth{statePath: statePath, lockPath: statePath + placementHealthLockSuffix, available: true, now: now, probeOwner: owner}
 }
 
 func (h *placementHealth) selectionClass(d *Driver, selection flexSelection) placementClass {
@@ -128,6 +133,7 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 	now := h.now()
 	healthy := make([]flexSelection, 0, len(configured))
 	cooling := make([]flexSelection, 0, len(configured))
+	coolingPositions := make([]int, 0, len(configured))
 	probePosition := -1
 	probeClassPosition := -1
 
@@ -140,6 +146,7 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 		}
 		entry := state.Classes[index]
 		cooling = append(cooling, selection)
+		coolingPositions = append(coolingPositions, position)
 		if d.FlexStockoutProbeLease > 0 && !now.Before(entry.CooldownUntil) && !now.Before(entry.ProbeUntil) &&
 			(probePosition < 0 || entry.CooldownUntil.Before(state.Classes[probeClassPosition].CooldownUntil)) {
 			probePosition = position
@@ -157,7 +164,7 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 	if probePosition >= 0 {
 		entry := state.Classes[probeClassPosition]
 		entry.ProbeUntil = now.Add(d.FlexStockoutProbeLease)
-		entry.ProbeOwner = d.MachineName
+		entry.ProbeOwner = h.probeOwner
 		state.Classes[probeClassPosition] = entry
 		if err := h.save(state); err != nil {
 			log.Warnf("Could not claim bulkInsert placement probe; using configured order: %v", err)
@@ -169,8 +176,8 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 		for _, selection := range healthy {
 			ordered = append(ordered, selection)
 		}
-		for _, selection := range cooling {
-			if !samePlacementClass(h.selectionClass(d, selection), state.Classes[probeClassPosition].Class) {
+		for i, selection := range cooling {
+			if coolingPositions[i] != probePosition {
 				ordered = append(ordered, selection)
 			}
 		}
@@ -249,7 +256,7 @@ func (h *placementHealth) releaseProbe(d *Driver, selection flexSelection) error
 	}
 	return h.update(func(state *placementHealthFile, _ time.Time) bool {
 		index := findPlacementClass(state, h.selectionClass(d, selection))
-		if index < 0 || state.Classes[index].ProbeOwner != d.MachineName {
+		if index < 0 || state.Classes[index].ProbeOwner != h.probeOwner {
 			return false
 		}
 		entry := state.Classes[index]
