@@ -249,8 +249,10 @@ func (h *placementHealth) recordPlacementAt(d *Driver, selection flexSelection, 
 			return false
 		}
 		entry.CooldownUntil = time.Time{}
-		entry.ProbeUntil = time.Time{}
-		entry.ProbeOwner = ""
+		if entry.ProbeOwner == "" || entry.ProbeOwner == h.probeOwner {
+			entry.ProbeUntil = time.Time{}
+			entry.ProbeOwner = ""
+		}
 		entry.LastPlaced = observedAt
 		state.Classes[index] = entry
 		return true
