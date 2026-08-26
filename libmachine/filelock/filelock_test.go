@@ -98,6 +98,11 @@ func TestAcquireZeroTimeoutMakesOneImmediateAttempt(t *testing.T) {
 	require.NoError(t, held.Unlock())
 }
 
+func TestAcquireRejectsNegativeTimeout(t *testing.T) {
+	_, err := Acquire(filepath.Join(t.TempDir(), "lock"), -time.Second)
+	assert.ErrorIs(t, err, ErrInvalidTimeout)
+}
+
 func TestAcquireMissingParent(t *testing.T) {
 	_, err := Acquire(filepath.Join(t.TempDir(), "missing", "lock"), time.Second)
 	assert.Error(t, err)

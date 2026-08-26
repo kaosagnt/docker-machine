@@ -7,6 +7,7 @@ import (
 )
 
 var ErrAcquireTimeout = errors.New("timed out awaiting file lock acquisition")
+var ErrInvalidTimeout = errors.New("file lock timeout must be non-negative")
 
 type Lock struct {
 	file *os.File
@@ -22,6 +23,9 @@ func (l *Lock) Unlock() error {
 }
 
 func Acquire(path string, timeout time.Duration) (*Lock, error) {
+	if timeout < 0 {
+		return nil, ErrInvalidTimeout
+	}
 	deadline := time.Now().Add(timeout)
 	firstAttempt := true
 	for {
@@ -40,7 +44,7 @@ func Acquire(path string, timeout time.Duration) (*Lock, error) {
 			return nil, err
 		}
 		if locked {
-			if !wasFirstAttempt && time.Now().After(deadline) {
+			if !wasFirstAttempt && !time.Now().Before(deadline) {
 				_ = file.Close()
 				return nil, ErrAcquireTimeout
 			}
