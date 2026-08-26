@@ -17,9 +17,11 @@ func (l *Lock) Unlock() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
-	file := l.file
+	if err := l.file.Close(); err != nil {
+		return err
+	}
 	l.file = nil
-	return file.Close()
+	return nil
 }
 
 func Acquire(path string, timeout time.Duration) (*Lock, error) {

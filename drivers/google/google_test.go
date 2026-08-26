@@ -33,12 +33,12 @@ func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 		expectedProbe time.Duration
 		expectErr     string
 	}{
-		"disabled by default": {expectedProbe: 90 * time.Second},
+		"disabled by default": {expectedProbe: 5 * time.Minute},
 		"durations are stored": {
 			cooldown:      "2m",
-			probeLease:    "90s",
+			probeLease:    "5m",
 			expected:      2 * time.Minute,
-			expectedProbe: 90 * time.Second,
+			expectedProbe: 5 * time.Minute,
 		},
 		"invalid cooldown is rejected": {
 			cooldown:  "soon",
@@ -66,6 +66,11 @@ func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 			probeLease: "-1s",
 			expectErr:  "must be >= 0",
 		},
+		"probe lease must cover operation timeout": {
+			cooldown:   "2m",
+			probeLease: "90s",
+			expectErr:  "must be >= google-operation-backoff-max-elapsed-time",
+		},
 	}
 
 	for name, tt := range tests {
@@ -81,6 +86,10 @@ func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 				values["google-flex-stockout-probe-lease"] = tt.probeLease
 			}
 			if tt.expectErr == "" && tt.cooldown != "" {
+				values["google-bulk-insert"] = true
+				values["google-region"] = "us-east1"
+			}
+			if tt.expectErr == "must be >= google-operation-backoff-max-elapsed-time" {
 				values["google-bulk-insert"] = true
 				values["google-region"] = "us-east1"
 			}

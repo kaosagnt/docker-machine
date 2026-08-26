@@ -30,7 +30,7 @@ func newTestPlacementHealth(t *testing.T) (*placementHealth, *Driver, time.Time)
 	d.Region = "us-east1"
 	d.LocationZones = []string{"us-east1-b", "us-east1-c", "us-east1-d"}
 	d.FlexStockoutCooldown = time.Minute
-	d.FlexStockoutProbeLease = 90 * time.Second
+	d.FlexStockoutProbeLease = 5 * time.Minute
 	return newPlacementHealth(d, func() time.Time { return now }), d, now
 }
 

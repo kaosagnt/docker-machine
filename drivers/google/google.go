@@ -338,7 +338,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Name:   "google-flex-stockout-probe-lease",
 			Usage:  "Lease duration that permits one process to probe a flex selection after its stockout cooldown expires.",
 			EnvVar: "GOOGLE_FLEX_STOCKOUT_PROBE_LEASE",
-			Value:  "90s",
+			Value:  "5m",
 		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-location-zone",
@@ -524,6 +524,9 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		Multiplier:          backoffMultipler,
 		MaxInterval:         time.Duration(flags.Int("google-operation-backoff-max-interval")) * time.Second,
 		MaxElapsedTime:      time.Duration(flags.Int("google-operation-backoff-max-elapsed-time")) * time.Second,
+	}
+	if d.FlexStockoutCooldown > 0 && d.FlexStockoutProbeLease < d.OperationBackoffFactory.MaxElapsedTime {
+		return fmt.Errorf("google-flex-stockout-probe-lease (%s) must be >= google-operation-backoff-max-elapsed-time (%s)", d.FlexStockoutProbeLease, d.OperationBackoffFactory.MaxElapsedTime)
 	}
 
 	return nil
