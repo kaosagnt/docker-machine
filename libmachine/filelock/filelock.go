@@ -28,6 +28,7 @@ func Acquire(path string, timeout time.Duration) (*Lock, error) {
 		if !firstAttempt && !time.Now().Before(deadline) {
 			return nil, ErrAcquireTimeout
 		}
+		wasFirstAttempt := firstAttempt
 		firstAttempt = false
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 		if err != nil {
@@ -39,7 +40,7 @@ func Acquire(path string, timeout time.Duration) (*Lock, error) {
 			return nil, err
 		}
 		if locked {
-			if time.Now().After(deadline) {
+			if !wasFirstAttempt && time.Now().After(deadline) {
 				_ = file.Close()
 				return nil, ErrAcquireTimeout
 			}

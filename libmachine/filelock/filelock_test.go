@@ -85,6 +85,19 @@ func TestAcquireCreatesOwnerOnlyFile(t *testing.T) {
 	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 }
 
+func TestAcquireZeroTimeoutMakesOneImmediateAttempt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock")
+	lock, err := Acquire(path, 0)
+	require.NoError(t, err)
+	require.NoError(t, lock.Unlock())
+
+	held, err := Acquire(path, time.Second)
+	require.NoError(t, err)
+	_, err = Acquire(path, 0)
+	assert.ErrorIs(t, err, ErrAcquireTimeout)
+	require.NoError(t, held.Unlock())
+}
+
 func TestAcquireMissingParent(t *testing.T) {
 	_, err := Acquire(filepath.Join(t.TempDir(), "missing", "lock"), time.Second)
 	assert.Error(t, err)
