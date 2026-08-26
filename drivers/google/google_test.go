@@ -2,6 +2,7 @@ package google
 
 import (
 	"testing"
+	"time"
 
 	"github.com/docker/machine/libmachine/drivers"
 	"github.com/stretchr/testify/assert"
@@ -22,6 +23,93 @@ func TestSetConfigFromFlags(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Empty(t, checkFlags.InvalidFlags)
+}
+
+func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
+	tests := map[string]struct {
+		cooldown      string
+		probeLease    string
+		expected      time.Duration
+		expectedProbe time.Duration
+		expectErr     string
+	}{
+		"disabled by default": {expectedProbe: defaultFlexStockoutProbeLease},
+		"durations are stored": {
+			cooldown:      "2m",
+			probeLease:    "5m",
+			expected:      2 * time.Minute,
+			expectedProbe: defaultFlexStockoutProbeLease,
+		},
+		"invalid cooldown is rejected": {
+			cooldown:  "soon",
+			expectErr: "google-flex-stockout-cooldown",
+		},
+		"negative cooldown is rejected": {
+			cooldown:  "-1s",
+			expectErr: "must be >= 0",
+		},
+		"cooldown requires bulkInsert": {
+			cooldown:  "1m",
+			expectErr: "requires --google-bulk-insert",
+		},
+		"invalid probe lease is rejected": {
+			cooldown:   "1m",
+			probeLease: "later",
+			expectErr:  "google-flex-stockout-probe-lease",
+		},
+		"non-positive probe lease is rejected when enabled": {
+			cooldown:   "1m",
+			probeLease: "0s",
+			expectErr:  "must be > 0",
+		},
+		"negative probe lease is rejected when disabled": {
+			probeLease: "-1s",
+			expectErr:  "must be >= 0",
+		},
+		"probe lease override requires bulkInsert": {
+			probeLease: "6m",
+			expectErr:  "requires --google-bulk-insert",
+		},
+		"probe lease must cover operation timeout": {
+			cooldown:   "2m",
+			probeLease: "90s",
+			expectErr:  "must be >= google-operation-backoff-max-elapsed-time",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			driver := NewDriver("machine", t.TempDir())
+			values := map[string]interface{}{
+				"google-project": "PROJECT",
+			}
+			if tt.cooldown != "" {
+				values["google-flex-stockout-cooldown"] = tt.cooldown
+			}
+			if tt.probeLease != "" {
+				values["google-flex-stockout-probe-lease"] = tt.probeLease
+			}
+			if tt.expectErr == "" && tt.cooldown != "" {
+				values["google-bulk-insert"] = true
+				values["google-region"] = "us-east1"
+			}
+			if tt.expectErr == "must be >= google-operation-backoff-max-elapsed-time" {
+				values["google-bulk-insert"] = true
+				values["google-region"] = "us-east1"
+			}
+
+			flags := &drivers.CheckDriverOptions{FlagsValues: values, CreateFlags: driver.GetCreateFlags()}
+			err := driver.SetConfigFromFlags(flags)
+			if tt.expectErr != "" {
+				require.ErrorContains(t, err, tt.expectErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, driver.FlexStockoutCooldown)
+			assert.Equal(t, tt.expectedProbe, driver.FlexStockoutProbeLease)
+		})
+	}
 }
 
 func TestSetConfigFromFlags_COSDockerNetworkReadinessGate(t *testing.T) {

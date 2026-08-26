@@ -84,6 +84,14 @@ type Driver struct {
 	// First entry = rank 0; format documented on --google-flex-selection.
 	FlexSelections []string
 
+	// FlexStockoutCooldown temporarily deprioritizes a flex selection after a
+	// recognized capacity failure. Zero preserves the configured order.
+	FlexStockoutCooldown time.Duration
+	// FlexStockoutProbeLease limits priority recovery probes across concurrent
+	// docker-machine command processes sharing StorePath. Other creates may
+	// still reach the selection after exhausting non-cooling alternatives.
+	FlexStockoutProbeLease time.Duration
+
 	// LocationZones constrains zone selection. Each entry is
 	// "zone[:PREFERENCE]" (ALLOW / DENY); empty means GCP picks any
 	// zone in Region. Note: bulkInsert's locationPolicy.locations[]
@@ -105,19 +113,20 @@ type Driver struct {
 }
 
 const (
-	defaultZone              = "us-central1-a"
-	defaultUser              = "ubuntu"
-	defaultMachineType       = "n1-standard-1"
-	defaultImageName         = "ubuntu-os-cloud/global/images/ubuntu-2204-jammy-v20250815"
-	defaultServiceAccount    = "default"
-	defaultScopes            = "https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
-	defaultDiskType          = "pd-standard"
-	defaultDiskSize          = 10
-	defaultNetwork           = "default"
-	defaultSubnetwork        = ""
-	defaultMinCPUPlatform    = ""
-	defaultAccelerator       = ""
-	defaultMaintenancePolicy = ""
+	defaultZone                   = "us-central1-a"
+	defaultUser                   = "ubuntu"
+	defaultMachineType            = "n1-standard-1"
+	defaultImageName              = "ubuntu-os-cloud/global/images/ubuntu-2204-jammy-v20250815"
+	defaultServiceAccount         = "default"
+	defaultScopes                 = "https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
+	defaultDiskType               = "pd-standard"
+	defaultDiskSize               = 10
+	defaultNetwork                = "default"
+	defaultSubnetwork             = ""
+	defaultMinCPUPlatform         = ""
+	defaultAccelerator            = ""
+	defaultMaintenancePolicy      = ""
+	defaultFlexStockoutProbeLease = 5 * time.Minute
 
 	defaultGoogleOperationBackoffInitialInterval     = 1
 	defaultGoogleOperationBackoffRandomizationFactor = "0.5"
@@ -320,6 +329,18 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "(Experimental) Candidate machine-type / disk spec for bulkInsert. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput override the boot disk for this entry. Repeat in preference order: first occurrence is tried first, subsequent entries are tried only if the previous one fails with a stockout-class error. Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Optional in bulkInsert mode: when omitted, a single selection is synthesised from --google-machine-type and --google-disk-type.",
 			EnvVar: "GOOGLE_FLEX_SELECTION",
 		},
+		mcnflag.StringFlag{
+			Name:   "google-flex-stockout-cooldown",
+			Usage:  "Temporarily try flex selections with recent stockout-class failures after other selections (0s disables).",
+			EnvVar: "GOOGLE_FLEX_STOCKOUT_COOLDOWN",
+			Value:  "0s",
+		},
+		mcnflag.StringFlag{
+			Name:   "google-flex-stockout-probe-lease",
+			Usage:  "Lease duration that permits one process to probe a flex selection after its stockout cooldown expires.",
+			EnvVar: "GOOGLE_FLEX_STOCKOUT_PROBE_LEASE",
+			Value:  defaultFlexStockoutProbeLease.String(),
+		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-location-zone",
 			Usage:  "(Experimental) Zone constraint for bulkInsert. Format: zone[:PREFERENCE] where preference is ALLOW (default) or DENY. Repeat per zone. Empty = any zone in --google-region. Note: GCE bulkInsert only accepts ALLOW or DENY here (PREFERRED is not valid and is coerced to ALLOW with a warning).",
@@ -422,6 +443,24 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.Region = flags.String("google-region")
 	d.FlexSelections = flags.StringSlice("google-flex-selection")
 	d.LocationZones = flags.StringSlice("google-location-zone")
+	var err error
+	d.FlexStockoutCooldown, err = time.ParseDuration(flags.String("google-flex-stockout-cooldown"))
+	if err != nil {
+		return fmt.Errorf("invalid google-flex-stockout-cooldown: %w", err)
+	}
+	if d.FlexStockoutCooldown < 0 {
+		return fmt.Errorf("google-flex-stockout-cooldown must be >= 0, got %s", d.FlexStockoutCooldown)
+	}
+	d.FlexStockoutProbeLease, err = time.ParseDuration(flags.String("google-flex-stockout-probe-lease"))
+	if err != nil {
+		return fmt.Errorf("invalid google-flex-stockout-probe-lease: %w", err)
+	}
+	if d.FlexStockoutProbeLease < 0 {
+		return fmt.Errorf("google-flex-stockout-probe-lease must be >= 0, got %s", d.FlexStockoutProbeLease)
+	}
+	if d.FlexStockoutCooldown > 0 && d.FlexStockoutProbeLease == 0 {
+		return fmt.Errorf("google-flex-stockout-probe-lease must be > 0 when stockout cooldown is enabled, got %s", d.FlexStockoutProbeLease)
+	}
 
 	if d.BulkInsert {
 		if d.UseExisting {
@@ -466,6 +505,12 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 			return errors.New("--google-location-zone requires --google-bulk-insert")
 		}
 	}
+	if !d.BulkInsert && d.FlexStockoutCooldown > 0 {
+		return errors.New("--google-flex-stockout-cooldown requires --google-bulk-insert")
+	}
+	if !d.BulkInsert && d.FlexStockoutProbeLease != defaultFlexStockoutProbeLease {
+		return errors.New("--google-flex-stockout-probe-lease requires --google-bulk-insert")
+	}
 
 	backoffRandomizationFactor, err := strconv.ParseFloat(flags.String("google-operation-backoff-randomization-factor"), 64)
 	if err != nil {
@@ -483,6 +528,9 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		Multiplier:          backoffMultipler,
 		MaxInterval:         time.Duration(flags.Int("google-operation-backoff-max-interval")) * time.Second,
 		MaxElapsedTime:      time.Duration(flags.Int("google-operation-backoff-max-elapsed-time")) * time.Second,
+	}
+	if d.FlexStockoutCooldown > 0 && d.FlexStockoutProbeLease < d.OperationBackoffFactory.MaxElapsedTime {
+		return fmt.Errorf("google-flex-stockout-probe-lease (%s) must be >= google-operation-backoff-max-elapsed-time (%s)", d.FlexStockoutProbeLease, d.OperationBackoffFactory.MaxElapsedTime)
 	}
 
 	return nil
