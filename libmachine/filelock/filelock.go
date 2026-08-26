@@ -13,7 +13,12 @@ type Lock struct {
 }
 
 func (l *Lock) Unlock() error {
-	return l.file.Close()
+	if l == nil || l.file == nil {
+		return nil
+	}
+	file := l.file
+	l.file = nil
+	return file.Close()
 }
 
 func Acquire(path string, timeout time.Duration) (*Lock, error) {

@@ -293,6 +293,9 @@ func (h *placementHealth) load() (*placementHealthFile, error) {
 	if err := json.Unmarshal(data, &header); err != nil {
 		return nil, &placementHealthCorruptError{err: err}
 	}
+	if header.Version == 0 {
+		return nil, &placementHealthCorruptError{err: errors.New("placement health version is missing")}
+	}
 	if header.Version != placementHealthVersion {
 		return nil, &placementHealthVersionError{version: header.Version}
 	}

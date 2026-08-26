@@ -149,6 +149,15 @@ func TestPlacementHealthCorruptStateIsRebuiltOnUpdate(t *testing.T) {
 	require.Len(t, state.Classes, 1)
 }
 
+func TestPlacementHealthVersionlessStateIsRebuiltOnUpdate(t *testing.T) {
+	health, d, _ := newTestPlacementHealth(t)
+	require.NoError(t, os.WriteFile(health.statePath, []byte(`{}`), 0600))
+	require.NoError(t, health.recordStockout(d, testSelections()[0]))
+	state, err := health.load()
+	require.NoError(t, err)
+	assert.Equal(t, placementHealthVersion, state.Version)
+}
+
 func TestPlacementHealthOversizedStateIsNotOverwritten(t *testing.T) {
 	health, d, _ := newTestPlacementHealth(t)
 	original := make([]byte, placementHealthMaxFileSize+1)
