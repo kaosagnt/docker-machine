@@ -221,6 +221,14 @@ func (r *RPCServerDriver) Stop(_ *struct{}, _ *struct{}) error {
 	return r.ActualDriver.Stop()
 }
 
+func (r *RPCServerDriver) UpdateLabels(labels map[string]string, _ *struct{}) error {
+	updater, ok := r.ActualDriver.(drivers.LabelUpdater)
+	if !ok {
+		return drivers.ErrLabelsNotSupported
+	}
+	return updater.UpdateLabels(labels)
+}
+
 func (r *RPCServerDriver) Heartbeat(_ *struct{}, _ *struct{}) error {
 	r.HeartbeatCh <- true
 	return nil
