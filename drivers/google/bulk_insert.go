@@ -722,8 +722,12 @@ func (c *ComputeUtil) discoverInstanceZone() (string, error) {
 			return zone, nil
 		}
 	}
-	return "", fmt.Errorf("instance %q not found in any zone after bulkInsert (operation completed but aggregatedList did not return it)", c.instanceName)
+	return "", fmt.Errorf("instance %q not found in any zone after bulkInsert (operation completed but aggregatedList did not return it): %w", c.instanceName, errInstanceNotPlaced)
 }
+
+// errInstanceNotPlaced reports a lookup that succeeded and found no
+// instance, as opposed to a lookup that failed.
+var errInstanceNotPlaced = errors.New("instance not placed")
 
 // resolvePlacedZone returns the zone the just-created bulkInsert VM
 // landed in. It prefers the zone the operation already reported

@@ -52,6 +52,10 @@ type ComputeUtil struct {
 	// distinguishes the field from the region() method.
 	regionExplicit string
 
+	// setResolvedZone writes a recovered zone back to the driver, so later
+	// ComputeUtil constructions in the same invocation skip rediscovery.
+	setResolvedZone func(string)
+
 	// bulkInsert policy inputs (empty in direct mode).
 	flexSelections []string
 	locationZones  []string
@@ -142,6 +146,7 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		flexSelections:          driver.FlexSelections,
 		locationZones:           driver.LocationZones,
 		bulkInsert:              driver.BulkInsert,
+		setResolvedZone:         func(z string) { driver.ResolvedZone = z },
 	}, nil
 }
 
@@ -352,6 +357,10 @@ func (c *ComputeUtil) openFirewallPorts(d *Driver) error {
 
 // instance retrieves the instance.
 func (c *ComputeUtil) instance() (*raw.Instance, error) {
+	if err := c.ensureZone("inspect"); err != nil {
+		return nil, err
+	}
+
 	return c.service.Instances.Get(c.project, c.zone, c.instanceName).Do()
 }
 
@@ -648,31 +657,47 @@ func parseLabels(d *Driver) map[string]string {
 	return labels
 }
 
+// ensureZone recovers the zone a failed bulkInsert create never
+// recorded. Without it every zone-scoped API call fails with an
+// empty-zone 400. Direct mode treats an empty zone as a bug worth
+// surfacing. A never-placed instance yields a not-found error so
+// callers can reap local state.
+func (c *ComputeUtil) ensureZone(operation string) error {
+	if c.zone != "" {
+		return nil
+	}
+	if !c.bulkInsert {
+		return fmt.Errorf("cannot %s instance %q: zone unresolved in direct mode (Driver.Zone should always be set from --google-zone here)", operation, c.instanceName)
+	}
+	log.Warnf("Zone unresolved for %q after a failed bulkInsert; attempting AggregatedList lookup to recover.", c.instanceName)
+	zone, err := c.discoverInstanceZone()
+	if err != nil {
+		// Only a successful lookup that found nothing means the instance is
+		// absent. A failed lookup (403, 5xx, transport) must not: treating
+		// it as not-found would let callers reap local state while the VM
+		// may still be running.
+		if !errors.Is(err, errInstanceNotPlaced) {
+			return fmt.Errorf("resolving zone to %s instance %q: %w", operation, c.instanceName, err)
+		}
+		log.Warnf("AggregatedList found no placed instance for %q; treating as not-found.", c.instanceName)
+		return &googleapi.Error{
+			Code:    http.StatusNotFound,
+			Message: fmt.Sprintf("instance %q has no resolved zone and was not found by AggregatedList; nothing to %s", c.instanceName, operation),
+		}
+	}
+	log.Infof("Recovered zone %q for %q via AggregatedList; proceeding with %s.", zone, c.instanceName, operation)
+	c.zone = zone
+	c.zoneURL = apiURL + c.project + "/zones/" + zone
+	if c.setResolvedZone != nil {
+		c.setResolvedZone(zone)
+	}
+	return nil
+}
+
 // deleteInstance deletes the instance, leaving the persistent disk.
-//
-// Recovers from the empty-zone state that bulkInsert can leave behind
-// when create fails after placement (e.g. VM_MIN_COUNT_NOT_REACHED):
-// without recovery, every subsequent delete would fail with "zone
-// unresolved" indefinitely, holding a goroutine and an idle slot per
-// stuck machine. Direct mode treats empty zone as a programming bug
-// worth surfacing, not a race to recover from.
 func (c *ComputeUtil) deleteInstance() error {
-	if c.zone == "" {
-		if !c.bulkInsert {
-			return fmt.Errorf("cannot delete instance %q: zone unresolved in direct mode (Driver.Zone should always be set from --google-zone here)", c.instanceName)
-		}
-		log.Warnf("Zone unresolved for %q after a failed bulkInsert; attempting AggregatedList lookup to recover.", c.instanceName)
-		zone, err := c.discoverInstanceZone()
-		if err != nil {
-			log.Warnf("AggregatedList lookup for %q did not find a placed instance (%v); treating as not-found so local state can be reaped.", c.instanceName, err)
-			return &googleapi.Error{
-				Code:    http.StatusNotFound,
-				Message: fmt.Sprintf("instance %q has no resolved zone and was not found by AggregatedList; nothing to delete", c.instanceName),
-			}
-		}
-		log.Infof("Recovered zone %q for %q via AggregatedList; proceeding with delete.", zone, c.instanceName)
-		c.zone = zone
-		c.zoneURL = apiURL + c.project + "/zones/" + zone
+	if err := c.ensureZone("delete"); err != nil {
+		return err
 	}
 
 	log.Infof("Deleting instance.")
@@ -687,6 +712,10 @@ func (c *ComputeUtil) deleteInstance() error {
 
 // stopInstance stops the instance.
 func (c *ComputeUtil) stopInstance() error {
+	if err := c.ensureZone("stop"); err != nil {
+		return err
+	}
+
 	op, err := c.service.Instances.Stop(c.project, c.zone, c.instanceName).Do()
 	if err != nil {
 		return err
@@ -698,6 +727,10 @@ func (c *ComputeUtil) stopInstance() error {
 
 // startInstance starts the instance.
 func (c *ComputeUtil) startInstance() error {
+	if err := c.ensureZone("start"); err != nil {
+		return err
+	}
+
 	op, err := c.service.Instances.Start(c.project, c.zone, c.instanceName).Do()
 	if err != nil {
 		return err
@@ -845,6 +878,10 @@ func (c *ComputeUtil) waitForGlobalOp(name string) error {
 
 // ip retrieves and returns the external IP address of the instance.
 func (c *ComputeUtil) ip() (string, error) {
+	if err := c.ensureZone("get the IP of"); err != nil {
+		return "", err
+	}
+
 	instance, err := c.service.Instances.Get(c.project, c.zone, c.instanceName).Do()
 	if err != nil {
 		return "", unwrapGoogleError(err)

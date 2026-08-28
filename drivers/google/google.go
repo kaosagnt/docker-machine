@@ -566,16 +566,26 @@ func (d *Driver) PreCreateCheck() error {
 
 	// Check if the instance already exists. There will be an error if the instance
 	// doesn't exist, so just check instance for nil.
-	log.Infof("Check if the instance already exists")
+	//
+	// Skipped when no zone is resolved yet, which only happens on a
+	// bulk-mode first attempt: the lookup never found anything there (it
+	// used to 400 on the empty zone, and with zone recovery it would cost
+	// an AggregatedList per create). A bulk retry after successful
+	// placement has ResolvedZone persisted and keeps the duplicate
+	// protection via a cheap zonal lookup. Direct mode, including
+	// UseExisting, always has a zone.
+	if effectiveZone(d) != "" {
+		log.Infof("Check if the instance already exists")
 
-	instance, _ := c.instance()
-	if d.UseExisting {
-		if instance == nil {
-			return fmt.Errorf("unable to find instance %q in zone %q", d.MachineName, d.Zone)
-		}
-	} else {
-		if instance != nil {
-			return fmt.Errorf("instance %q already exists in zone %q", d.MachineName, d.Zone)
+		instance, _ := c.instance()
+		if d.UseExisting {
+			if instance == nil {
+				return fmt.Errorf("unable to find instance %q in zone %q", d.MachineName, d.Zone)
+			}
+		} else {
+			if instance != nil {
+				return fmt.Errorf("instance %q already exists in zone %q", d.MachineName, d.Zone)
+			}
 		}
 	}
 
@@ -648,11 +658,23 @@ func (d *Driver) GetState() (state.State, error) {
 		return state.None, err
 	}
 
-	// All we care about is whether the disk exists, so we just check disk for a nil value.
-	// There will be no error if disk is not nil.
-	instance, _ := c.instance()
+	return getState(c)
+}
+
+// getState maps the instance (or, for a stopped-and-deleted instance, its
+// leftover disk) to a machine state. Only a genuine not-found means absent:
+// other lookup failures propagate, because state.None tells callers to reap
+// local state while the VM may still be running.
+func getState(c *ComputeUtil) (state.State, error) {
+	instance, err := c.instance()
+	if err != nil && !isNotFound(err) {
+		return state.None, err
+	}
 	if instance == nil {
-		disk, _ := c.disk()
+		disk, derr := c.disk()
+		if derr != nil && !isNotFound(derr) {
+			return state.None, derr
+		}
 		if disk == nil {
 			return state.None, nil
 		}

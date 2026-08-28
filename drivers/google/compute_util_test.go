@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/docker/machine/libmachine/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	raw "google.golang.org/api/compute/v1"
@@ -627,37 +629,41 @@ func TestDeleteInstance_RecoversZoneViaAggregatedList(t *testing.T) {
 	assert.Contains(t, c.zoneURL, "/zones/us-east1-c")
 }
 
-func TestDeleteInstance_UnresolvedZoneReturns404(t *testing.T) {
-	tests := map[string]http.HandlerFunc{
-		"aggregated list returns empty": func(w http.ResponseWriter, r *http.Request) {
-			if !strings.Contains(r.URL.Path, "/aggregated/instances") {
-				t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
-			}
-			resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
-			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
-			fmt.Fprint(w, body)
-		},
-		"aggregated list returns HTTP 403": func(w http.ResponseWriter, r *http.Request) {
-			if !strings.Contains(r.URL.Path, "/aggregated/instances") {
-				t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
-			}
-			http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
-		},
-	}
+func TestDeleteInstance_NeverPlacedReturns404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+			t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
+		}
+		resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
 
-	for tn, handler := range tests {
-		t.Run(tn, func(t *testing.T) {
-			srv := httptest.NewServer(handler)
-			defer srv.Close()
+	c := newUnresolvedZoneComputeUtil(t, srv)
 
-			c := newUnresolvedZoneComputeUtil(t, srv)
+	err := c.deleteInstance()
 
-			err := c.deleteInstance()
+	require.Error(t, err)
+	assert.True(t, isNotFound(err), "got %T: %v", err, err)
+}
 
-			require.Error(t, err)
-			assert.True(t, isNotFound(err), "got %T: %v", err, err)
-		})
-	}
+func TestDeleteInstance_LookupFailurePropagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+			t.Fatalf("unexpected call to %s; lookup failure must not reach the delete", r.URL.Path)
+		}
+		http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+
+	err := c.deleteInstance()
+
+	require.Error(t, err)
+	assert.False(t, isNotFound(err), "a failed lookup must not be treated as absent: %v", err)
+	assert.Contains(t, err.Error(), "403")
 }
 
 func TestDeleteInstance_DirectModeUnresolvedZoneReturnsError(t *testing.T) {
@@ -672,4 +678,210 @@ func TestDeleteInstance_DirectModeUnresolvedZoneReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, isNotFound(err), "direct mode must not synthesise a 404")
 	assert.Contains(t, err.Error(), "direct mode")
+}
+
+type zoneRecoveryOperation struct {
+	run        func(c *ComputeUtil) error
+	wantMethod string
+	wantPath   string
+}
+
+func zoneRecoveryOperations() map[string]zoneRecoveryOperation {
+	return map[string]zoneRecoveryOperation{
+		"stop": {
+			run:        func(c *ComputeUtil) error { return c.stopInstance() },
+			wantMethod: http.MethodPost,
+			wantPath:   "/projects/p/zones/us-east1-c/instances/runner-abc/stop",
+		},
+		"start": {
+			run:        func(c *ComputeUtil) error { return c.startInstance() },
+			wantMethod: http.MethodPost,
+			wantPath:   "/projects/p/zones/us-east1-c/instances/runner-abc/start",
+		},
+		"inspect": {
+			run: func(c *ComputeUtil) error {
+				_, err := c.instance()
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/projects/p/zones/us-east1-c/instances/runner-abc",
+		},
+		"ip": {
+			run: func(c *ComputeUtil) error {
+				_, err := c.ip()
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/projects/p/zones/us-east1-c/instances/runner-abc",
+		},
+	}
+}
+
+func TestZoneRecovery_StopStartInspectTargetRecoveredZone(t *testing.T) {
+	for tn, operation := range zoneRecoveryOperations() {
+		t.Run(tn, func(t *testing.T) {
+			var mu sync.Mutex
+			var calls []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				calls = append(calls, r.Method+" "+r.URL.Path)
+				mu.Unlock()
+
+				if strings.Contains(r.URL.Path, "/aggregated/instances") {
+					resp := raw.InstanceAggregatedList{
+						Items: map[string]raw.InstancesScopedList{
+							"zones/us-east1-c": {
+								Instances: []*raw.Instance{
+									{
+										Name: "runner-abc",
+										Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
+									},
+								},
+							},
+						},
+					}
+					body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+					fmt.Fprint(w, body)
+					return
+				}
+				if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/instances/runner-abc") {
+					body, _ := googleapi.WithoutDataWrapper.JSONReader(raw.Instance{
+						Name: "runner-abc",
+						NetworkInterfaces: []*raw.NetworkInterface{
+							{
+								NetworkIP:     "10.0.0.2",
+								AccessConfigs: []*raw.AccessConfig{{NatIP: "203.0.113.7"}},
+							},
+						},
+					})
+					fmt.Fprint(w, body)
+					return
+				}
+				op := raw.Operation{Name: "op-1", Status: "DONE"}
+				body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+				fmt.Fprint(w, body)
+			}))
+			defer srv.Close()
+
+			c := newUnresolvedZoneComputeUtil(t, srv)
+
+			require.NoError(t, operation.run(c))
+			assert.Equal(t, "us-east1-c", c.zone)
+
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Contains(t, calls, operation.wantMethod+" "+operation.wantPath)
+		})
+	}
+}
+
+func TestZoneRecovery_StopStartInspectNeverPlacedReturnsNotFound(t *testing.T) {
+	for tn, operation := range zoneRecoveryOperations() {
+		t.Run(tn, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+					t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
+				}
+				resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
+				body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+				fmt.Fprint(w, body)
+			}))
+			defer srv.Close()
+
+			c := newUnresolvedZoneComputeUtil(t, srv)
+
+			err := operation.run(c)
+
+			require.Error(t, err)
+			assert.True(t, isNotFound(err), "got %T: %v", err, err)
+		})
+	}
+}
+
+func TestZoneRecovery_StopStartInspectLookupFailurePropagates(t *testing.T) {
+	for tn, operation := range zoneRecoveryOperations() {
+		t.Run(tn, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
+			}))
+			defer srv.Close()
+
+			c := newUnresolvedZoneComputeUtil(t, srv)
+
+			err := operation.run(c)
+
+			require.Error(t, err)
+			assert.False(t, isNotFound(err), "a failed lookup must not be treated as absent: %v", err)
+			assert.Contains(t, err.Error(), "403")
+		})
+	}
+}
+
+func TestZoneRecovery_WritesZoneBackToDriver(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/aggregated/instances") {
+			resp := raw.InstanceAggregatedList{
+				Items: map[string]raw.InstancesScopedList{
+					"zones/us-east1-c": {
+						Instances: []*raw.Instance{
+							{
+								Name: "runner-abc",
+								Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
+							},
+						},
+					},
+				},
+			}
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+			fmt.Fprint(w, body)
+			return
+		}
+		op := raw.Operation{Name: "op-1", Status: "DONE"}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	var resolved string
+	c := newUnresolvedZoneComputeUtil(t, srv)
+	c.setResolvedZone = func(z string) { resolved = z }
+
+	require.NoError(t, c.stopInstance())
+	assert.Equal(t, "us-east1-c", resolved)
+}
+
+func TestGetState_LookupFailureIsNotAbsence(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+
+	st, err := getState(c)
+
+	require.Error(t, err)
+	assert.Equal(t, state.None, st)
+	assert.Contains(t, err.Error(), "403")
+}
+
+func TestGetState_NeverPlacedWithoutDiskIsNone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/aggregated/instances") {
+			resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+			fmt.Fprint(w, body)
+			return
+		}
+		// Disk lookup: a genuine 404.
+		http.Error(w, `{"error":{"code":404,"message":"not found"}}`, http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+
+	st, err := getState(c)
+
+	require.NoError(t, err)
+	assert.Equal(t, state.None, st)
 }
