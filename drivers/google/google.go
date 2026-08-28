@@ -754,7 +754,6 @@ func (d *Driver) Kill() error {
 	return d.Stop()
 }
 
-// UpdateLabels merges the given labels into the instance's labels.
 func (d *Driver) UpdateLabels(labels map[string]string) error {
 	c, err := newComputeUtil(d)
 	if err != nil {

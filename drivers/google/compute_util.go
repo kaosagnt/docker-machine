@@ -711,9 +711,8 @@ func (c *ComputeUtil) deleteInstance() error {
 }
 
 // updateInstanceLabels merges labels into the instance's current label
-// set. SetLabels requires the current fingerprint, so this is a
-// read-modify-write and a concurrent label change loses the race; the
-// next update repairs it.
+// set. A concurrent label change loses the fingerprint race; the next
+// update repairs it.
 func (c *ComputeUtil) updateInstanceLabels(labels map[string]string) error {
 	if err := c.ensureZone("update-labels"); err != nil {
 		return err
