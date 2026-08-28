@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"encoding/json"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -884,4 +885,46 @@ func TestGetState_NeverPlacedWithoutDiskIsNone(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, state.None, st)
+}
+
+func TestUpdateInstanceLabels_MergesAndKeepsFingerprint(t *testing.T) {
+	var setLabelsReq *raw.InstancesSetLabelsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/instances/runner-abc"):
+			_ = json.NewEncoder(w).Encode(raw.Instance{
+				Name:             "runner-abc",
+				LabelFingerprint: "fp-1",
+				Labels: map[string]string{
+					"gl_resource_type":         "ci_ephemeral",
+					"runner_manager_heartbeat": "100",
+				},
+			})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/instances/runner-abc/setLabels"):
+			setLabelsReq = &raw.InstancesSetLabelsRequest{}
+			_ = json.NewDecoder(r.Body).Decode(setLabelsReq)
+			_ = json.NewEncoder(w).Encode(raw.Operation{Name: "op-1", Status: "DONE"})
+		case strings.Contains(r.URL.Path, "/operations/"):
+			_ = json.NewEncoder(w).Encode(raw.Operation{Name: "op-1", Status: "DONE"})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+	c.bulkInsert = false
+	c.zone = "us-east1-c"
+
+	err := c.updateInstanceLabels(map[string]string{"runner_manager_heartbeat": "200"})
+	assert.NoError(t, err)
+
+	require.NotNil(t, setLabelsReq)
+	assert.Equal(t, "fp-1", setLabelsReq.LabelFingerprint)
+	assert.Equal(t, map[string]string{
+		"gl_resource_type":         "ci_ephemeral",
+		"runner_manager_heartbeat": "200",
+	}, setLabelsReq.Labels)
 }
