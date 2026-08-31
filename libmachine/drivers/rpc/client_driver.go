@@ -370,9 +370,7 @@ func (c *RPCClientDriver) Upgrade() error {
 
 func (c *RPCClientDriver) UpdateLabels(labels map[string]string) error {
 	err := c.Client.Call(UpdateLabelsMethod, labels, nil)
-	// A plugin predating this method still passes the API version
-	// handshake; degrade to the same error a non-implementing driver
-	// returns instead of a raw rpc lookup failure.
+	// plugins predating this method pass the version handshake
 	if err != nil && strings.Contains(err.Error(), "can't find method") {
 		return drivers.ErrLabelsNotSupported
 	}
