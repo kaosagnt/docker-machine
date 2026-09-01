@@ -71,11 +71,15 @@ timeout 15 docker run \
 	--pull=never \
 	--network bridge \
 	alpine:latest \
-	wget -S -q -O /dev/null -T 8 ` + url + ` 2>&1 | grep -q "HTTP/"
+	wget -S -q -O /dev/null -T 8 "$1" 2>&1 | grep -q "HTTP/"
 rc=$?
 docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true
 exit $rc
-'`
+' probe ` + shellQuote(url) + ``
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // dockerNetworkDiagnosticsCmd is best-effort evidence collected before the

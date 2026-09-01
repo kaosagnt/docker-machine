@@ -157,12 +157,12 @@ func TestSetConfigFromFlags_COSDockerNetworkReadinessURL(t *testing.T) {
 			url:              "https://gitlab.com/readiness",
 			expectedMetadata: metadataMap{cosDockerNetworkReadinessURLMetadataKey: "https://gitlab.com/readiness"},
 		},
+		"query string accepted": {
+			url:              "https://gitlab.com/health?check=1&token=abc",
+			expectedMetadata: metadataMap{cosDockerNetworkReadinessURLMetadataKey: "https://gitlab.com/health?check=1&token=abc"},
+		},
 		"non-http scheme rejected": {
 			url:       "ftp://gitlab.com",
-			expectErr: true,
-		},
-		"shell metacharacters rejected": {
-			url:       "https://gitlab.com/$(reboot)",
 			expectErr: true,
 		},
 		"missing host rejected": {

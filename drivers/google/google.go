@@ -575,9 +575,6 @@ func validateReadinessURL(raw string) error {
 	if u.Host == "" {
 		return fmt.Errorf("google-cos-docker-network-readiness-url %q must include a host", raw)
 	}
-	if strings.ContainsAny(raw, "'\"\\ \t\n\r;&|`$(){}<>*?[]") {
-		return fmt.Errorf("google-cos-docker-network-readiness-url %q must not contain shell metacharacters or whitespace", raw)
-	}
 	return nil
 }
 

@@ -2,6 +2,7 @@ package provision
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"testing"
 
@@ -94,6 +95,31 @@ func TestGoogleCOSReadinessURLUnset(t *testing.T) {
 
 func TestDockerNetworkProbeShellSyntax(t *testing.T) {
 	require.NoError(t, exec.Command("sh", "-n", "-c", dockerNetworkCheck("https://gitlab.com/readiness")).Run())
+}
+
+func TestShellQuoteSurvivesTwoShellLayers(t *testing.T) {
+	dir := t.TempDir()
+	marker := dir + "/pwned"
+	inputs := []string{
+		"https://gitlab.com/readiness",
+		"https://gitlab.com/health?check=1&token=abc",
+		"https://gitlab.com/a'b",
+		"https://gitlab.com/';touch " + marker + ";'",
+		"https://gitlab.com/$(touch " + marker + ")",
+		"https://gitlab.com/`touch " + marker + "`",
+		`https://gitlab.com/x\'y`,
+	}
+
+	for _, in := range inputs {
+		out := dir + "/out"
+		inner := "sh -c 'printf %s \"$1\" >" + out + "' probe " + shellQuote(in)
+		require.NoError(t, exec.Command("sh", "-c", inner).Run(), in)
+
+		got, err := os.ReadFile(out)
+		require.NoError(t, err)
+		assert.Equal(t, in, string(got), in)
+		assert.NoFileExists(t, marker, in)
+	}
 }
 
 func TestReadinessMetadataCheckShellSyntax(t *testing.T) {
