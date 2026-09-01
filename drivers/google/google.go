@@ -754,6 +754,15 @@ func (d *Driver) Kill() error {
 	return d.Stop()
 }
 
+func (d *Driver) UpdateLabels(labels map[string]string) error {
+	c, err := newComputeUtil(d)
+	if err != nil {
+		return err
+	}
+
+	return c.updateInstanceLabels(labels)
+}
+
 // Remove deletes the GCE instance and the disk.
 func (d *Driver) Remove() error {
 	c, err := newComputeUtil(d)

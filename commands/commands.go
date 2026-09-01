@@ -305,6 +305,19 @@ var Commands = []cli.Command{
 		Action: runCommand(cmdProvision),
 	},
 	{
+		Name:        "update-labels",
+		Usage:       "Update provider labels on a machine",
+		Description: "Argument is a machine name.",
+		Action:      runCommand(cmdUpdateLabels),
+		Flags: []cli.Flag{
+			cli.StringSliceFlag{
+				Name:  "label",
+				Usage: "Label to set, in key=value form. Repeatable.",
+				Value: &cli.StringSlice{},
+			},
+		},
+	},
+	{
 		Name:        "regenerate-certs",
 		Usage:       "Regenerate TLS Certificates for a machine",
 		Description: "Argument(s) are one or more machine names.",

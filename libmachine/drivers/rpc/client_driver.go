@@ -3,6 +3,7 @@ package rpcdriver
 import (
 	"fmt"
 	"net/rpc"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,6 +84,7 @@ const (
 	RestartMethod            = `.Restart`
 	KillMethod               = `.Kill`
 	UpgradeMethod            = `.Upgrade`
+	UpdateLabelsMethod       = `.UpdateLabels`
 )
 
 func (ic *InternalClient) Call(serviceMethod string, args interface{}, reply interface{}) error {
@@ -364,4 +366,13 @@ func (c *RPCClientDriver) Kill() error {
 
 func (c *RPCClientDriver) Upgrade() error {
 	return c.Client.Call(UpgradeMethod, struct{}{}, nil)
+}
+
+func (c *RPCClientDriver) UpdateLabels(labels map[string]string) error {
+	err := c.Client.Call(UpdateLabelsMethod, labels, nil)
+	// plugins predating this method pass the version handshake
+	if err != nil && strings.Contains(err.Error(), "can't find method") {
+		return drivers.ErrLabelsNotSupported
+	}
+	return err
 }

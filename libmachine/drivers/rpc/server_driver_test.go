@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/docker/machine/drivers/fakedriver"
+	"github.com/docker/machine/libmachine/drivers"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -72,4 +73,30 @@ func TestRPCServerDriverCreate(t *testing.T) {
 		stdStacker = tc.stacker
 		assert.Equal(t, tc.expectedErr, tc.serverDriver.Create(nil, nil))
 	}
+}
+
+type labelUpdaterDriver struct {
+	*fakedriver.Driver
+	labels map[string]string
+}
+
+func (d *labelUpdaterDriver) UpdateLabels(labels map[string]string) error {
+	d.labels = labels
+	return nil
+}
+
+func TestServerDriverUpdateLabels(t *testing.T) {
+	updater := &labelUpdaterDriver{Driver: &fakedriver.Driver{}}
+	server := NewRPCServerDriver(updater)
+
+	labels := map[string]string{"runner_manager_heartbeat": "123"}
+	assert.NoError(t, server.UpdateLabels(labels, nil))
+	assert.Equal(t, labels, updater.labels)
+}
+
+func TestServerDriverUpdateLabelsUnsupported(t *testing.T) {
+	server := NewRPCServerDriver(&fakedriver.Driver{})
+
+	err := server.UpdateLabels(map[string]string{"a": "b"}, nil)
+	assert.Equal(t, drivers.ErrLabelsNotSupported, err)
 }

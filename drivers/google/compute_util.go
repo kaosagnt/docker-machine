@@ -710,6 +710,38 @@ func (c *ComputeUtil) deleteInstance() error {
 	return c.waitForRegionalOp(op.Name)
 }
 
+// updateInstanceLabels merges labels into the instance's current label
+// set. A concurrent label change loses the fingerprint race; the next
+// update repairs it.
+func (c *ComputeUtil) updateInstanceLabels(labels map[string]string) error {
+	if err := c.ensureZone("update-labels"); err != nil {
+		return err
+	}
+
+	instance, err := c.instance()
+	if err != nil {
+		return err
+	}
+
+	merged := map[string]string{}
+	for k, v := range instance.Labels {
+		merged[k] = v
+	}
+	for k, v := range labels {
+		merged[k] = v
+	}
+
+	op, err := c.service.Instances.SetLabels(c.project, c.zone, c.instanceName, &raw.InstancesSetLabelsRequest{
+		Labels:           merged,
+		LabelFingerprint: instance.LabelFingerprint,
+	}).Do()
+	if err != nil {
+		return err
+	}
+
+	return c.waitForRegionalOp(op.Name)
+}
+
 // stopInstance stops the instance.
 func (c *ComputeUtil) stopInstance() error {
 	if err := c.ensureZone("stop"); err != nil {
