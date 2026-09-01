@@ -144,6 +144,56 @@ func TestSetConfigFromFlags_COSDockerNetworkReadinessGate(t *testing.T) {
 	}
 }
 
+func TestSetConfigFromFlags_COSDockerNetworkReadinessURL(t *testing.T) {
+	tests := map[string]struct {
+		url              string
+		expectErr        bool
+		expectedMetadata metadataMap
+	}{
+		"unset by default": {
+			expectedMetadata: metadataMap{},
+		},
+		"valid https url injects metadata": {
+			url:              "https://gitlab.com/readiness",
+			expectedMetadata: metadataMap{cosDockerNetworkReadinessURLMetadataKey: "https://gitlab.com/readiness"},
+		},
+		"non-http scheme rejected": {
+			url:       "ftp://gitlab.com",
+			expectErr: true,
+		},
+		"shell metacharacters rejected": {
+			url:       "https://gitlab.com/$(reboot)",
+			expectErr: true,
+		},
+		"missing host rejected": {
+			url:       "https:///path",
+			expectErr: true,
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			driver := NewDriver("", "")
+			flags := &drivers.CheckDriverOptions{
+				FlagsValues: map[string]interface{}{
+					"google-project": "PROJECT",
+					"google-cos-docker-network-readiness-url": tt.url,
+				},
+				CreateFlags: driver.GetCreateFlags(),
+			}
+
+			err := driver.SetConfigFromFlags(flags)
+			if tt.expectErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.url, driver.COSDockerNetworkReadinessURL)
+			assert.Equal(t, tt.expectedMetadata, driver.Metadata)
+		})
+	}
+}
+
 func TestSetConfigFromFlags_ProvisionedIopsAndThroughput(t *testing.T) {
 	tests := map[string]struct {
 		iops               interface{}
