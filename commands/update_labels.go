@@ -13,7 +13,7 @@ import (
 var errNoLabels = errors.New("no --label given, expected at least one key=value pair")
 
 func cmdUpdateLabels(c CommandLine, api libmachine.API) error {
-	if len(c.Args()) > 1 {
+	if len(c.Args()) != 1 {
 		c.ShowHelp()
 		return ErrExpectedOneMachine
 	}
@@ -24,7 +24,7 @@ func cmdUpdateLabels(c CommandLine, api libmachine.API) error {
 		key = strings.TrimSpace(key)
 		value = strings.TrimSpace(value)
 		if !found || key == "" {
-			return fmt.Errorf("invalid label %q, expected key=value", kv)
+			return fmt.Errorf("invalid label format %q, expected key=value", kv)
 		}
 		labels[key] = value
 	}
@@ -32,10 +32,7 @@ func cmdUpdateLabels(c CommandLine, api libmachine.API) error {
 		return errNoLabels
 	}
 
-	target, err := targetHost(c, api)
-	if err != nil {
-		return err
-	}
+	target := c.Args().First()
 
 	host, err := api.Load(target)
 	if err != nil {

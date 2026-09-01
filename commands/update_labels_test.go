@@ -117,3 +117,13 @@ func TestCmdUpdateLabelsTrimsWhitespace(t *testing.T) {
 	assert.NoError(t, cmdUpdateLabels(commandLine, api))
 	assert.Equal(t, map[string]string{"key": "value"}, updater.labels)
 }
+
+func TestCmdUpdateLabelsRequiresMachineName(t *testing.T) {
+	err := cmdUpdateLabels(&commandstest.FakeCommandLine{
+		CliArgs: []string{},
+		LocalFlags: &commandstest.FakeFlagger{
+			Data: map[string]interface{}{"label": []string{"a=b"}},
+		},
+	}, &libmachinetest.FakeAPI{})
+	assert.Equal(t, ErrExpectedOneMachine, err)
+}
