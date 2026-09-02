@@ -2,12 +2,15 @@ package provision
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const testReadinessURL = "https://gitlab.com/readiness"
 
 type scriptedSSHCommander struct {
 	responses map[string][]scriptedSSHResponse
@@ -37,7 +40,7 @@ func newGoogleCOSProvisionerForTest(commander SSHCommander) *GoogleCOSProvisione
 
 func TestGoogleCOSReadinessEnabled(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		readinessMetadataCheck: {{out: "true\n"}},
+		metadataAttributeCheck(readinessGateMetadataKey): {{out: "true\n"}},
 	}}
 
 	enabled, err := newGoogleCOSProvisionerForTest(commander).readinessEnabled()
@@ -48,7 +51,7 @@ func TestGoogleCOSReadinessEnabled(t *testing.T) {
 
 func TestGoogleCOSReadinessDisabled(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		readinessMetadataCheck: {{out: ""}},
+		metadataAttributeCheck(readinessGateMetadataKey): {{out: ""}},
 	}}
 
 	enabled, err := newGoogleCOSProvisionerForTest(commander).readinessEnabled()
@@ -59,7 +62,7 @@ func TestGoogleCOSReadinessDisabled(t *testing.T) {
 
 func TestGoogleCOSReadinessMetadataFailure(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		readinessMetadataCheck: {{err: errors.New("metadata unavailable")}},
+		metadataAttributeCheck(readinessGateMetadataKey): {{err: errors.New("metadata unavailable")}},
 	}}
 
 	enabled, err := newGoogleCOSProvisionerForTest(commander).readinessEnabled()
@@ -68,12 +71,59 @@ func TestGoogleCOSReadinessMetadataFailure(t *testing.T) {
 	assert.False(t, enabled)
 }
 
+func TestGoogleCOSReadinessURLSet(t *testing.T) {
+	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
+		metadataAttributeCheck(readinessURLMetadataKey): {{out: "https://gitlab.com/readiness\n"}},
+	}}
+
+	url, err := newGoogleCOSProvisionerForTest(commander).readinessURL()
+
+	require.NoError(t, err)
+	assert.Equal(t, "https://gitlab.com/readiness", url)
+}
+
+func TestGoogleCOSReadinessURLUnset(t *testing.T) {
+	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
+		metadataAttributeCheck(readinessURLMetadataKey): {{out: ""}},
+	}}
+
+	url, err := newGoogleCOSProvisionerForTest(commander).readinessURL()
+
+	require.NoError(t, err)
+	assert.Empty(t, url)
+}
+
 func TestDockerNetworkProbeShellSyntax(t *testing.T) {
-	require.NoError(t, exec.Command("sh", "-n", "-c", dockerNetworkCheck).Run())
+	require.NoError(t, exec.Command("sh", "-n", "-c", dockerNetworkCheck("https://gitlab.com/readiness")).Run())
+}
+
+func TestShellQuoteSurvivesTwoShellLayers(t *testing.T) {
+	dir := t.TempDir()
+	marker := dir + "/pwned"
+	inputs := []string{
+		"https://gitlab.com/readiness",
+		"https://gitlab.com/health?check=1&token=abc",
+		"https://gitlab.com/a'b",
+		"https://gitlab.com/';touch " + marker + ";'",
+		"https://gitlab.com/$(touch " + marker + ")",
+		"https://gitlab.com/`touch " + marker + "`",
+		`https://gitlab.com/x\'y`,
+	}
+
+	for _, in := range inputs {
+		out := dir + "/out"
+		inner := "sh -c 'printf %s \"$1\" >" + out + "' probe " + shellQuote(in)
+		require.NoError(t, exec.Command("sh", "-c", inner).Run(), in)
+
+		got, err := os.ReadFile(out)
+		require.NoError(t, err)
+		assert.Equal(t, in, string(got), in)
+		assert.NoFileExists(t, marker, in)
+	}
 }
 
 func TestReadinessMetadataCheckShellSyntax(t *testing.T) {
-	require.NoError(t, exec.Command("sh", "-n", "-c", readinessMetadataCheck).Run())
+	require.NoError(t, exec.Command("sh", "-n", "-c", metadataAttributeCheck(readinessGateMetadataKey)).Run())
 }
 
 func TestDockerNetworkDiagnosticsShellSyntax(t *testing.T) {
@@ -99,7 +149,7 @@ func TestVerifyDockerBridgeNetworkRequiresPreloadedImage(t *testing.T) {
 		dockerNetworkVerifierImageCheck: {{err: errors.New("No such image")}},
 	}}
 
-	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
+	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(testReadinessURL, 0)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "verifier image alpine:latest is not present")
@@ -107,49 +157,54 @@ func TestVerifyDockerBridgeNetworkRequiresPreloadedImage(t *testing.T) {
 }
 
 func TestDockerNetworkProbeCleansUpNamedContainer(t *testing.T) {
-	assert.Contains(t, dockerNetworkCheck, "--name "+dockerNetworkProbeContainer)
-	assert.Contains(t, dockerNetworkCheck, "docker rm -f "+dockerNetworkProbeContainer)
-	assert.Contains(t, dockerNetworkCheck, "--pull=never")
+	check := dockerNetworkCheck(testReadinessURL)
+	assert.Contains(t, check, "--name "+dockerNetworkProbeContainer)
+	assert.Contains(t, check, "docker rm -f "+dockerNetworkProbeContainer)
+	assert.Contains(t, check, "--pull=never")
+	assert.Contains(t, check, testReadinessURL)
 }
 
 func TestVerifyDockerBridgeNetworkHealthy(t *testing.T) {
+	check := dockerNetworkCheck(testReadinessURL)
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
 		dockerNetworkVerifierImageCheck: {{}},
-		dockerNetworkCheck:              {{}},
+		check:                           {{}},
 	}}
 
-	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
+	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(testReadinessURL, 0)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{dockerNetworkVerifierImageCheck, dockerNetworkCheck}, commander.calls)
+	assert.Equal(t, []string{dockerNetworkVerifierImageCheck, check}, commander.calls)
 }
 
 func TestVerifyDockerBridgeNetworkRepairsOnce(t *testing.T) {
+	check := dockerNetworkCheck(testReadinessURL)
 	missing := make([]scriptedSSHResponse, 5)
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
 		dockerNetworkVerifierImageCheck:    {{}},
-		dockerNetworkCheck:                 appendMissingThenSuccess(missing),
+		check:                              appendMissingThenSuccess(missing),
 		dockerNetworkDiagnosticsCmd:        {{}},
 		"sudo systemctl daemon-reload":     {{}},
 		"sudo systemctl -f restart docker": {{}},
 		"sudo docker version":              {{}},
 	}}
 
-	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
+	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(testReadinessURL, 0)
 
 	require.NoError(t, err)
-	assert.Equal(t, 6, countCalls(commander.calls, dockerNetworkCheck))
+	assert.Equal(t, 6, countCalls(commander.calls, check))
 	assert.Equal(t, 1, countCalls(commander.calls, "sudo systemctl -f restart docker"))
 }
 
 func TestVerifyDockerBridgeNetworkFailsClosed(t *testing.T) {
+	check := dockerNetworkCheck(testReadinessURL)
 	missing := make([]scriptedSSHResponse, 15)
 	for i := range missing {
 		missing[i].err = errors.New("rules missing")
 	}
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
 		dockerNetworkVerifierImageCheck:                    {{}},
-		dockerNetworkCheck:                                 missing,
+		check:                                              missing,
 		dockerNetworkDiagnosticsCmd:                        {{}},
 		"sudo systemctl daemon-reload":                     {{}},
 		"sudo systemctl -f restart docker":                 {{}},
@@ -157,7 +212,7 @@ func TestVerifyDockerBridgeNetworkFailsClosed(t *testing.T) {
 		"sudo systemctl stop docker.service docker.socket": {{}},
 	}}
 
-	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(0)
+	err := newGoogleCOSProvisionerForTest(commander).verifyDockerBridgeNetworkWithInterval(testReadinessURL, 0)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "remained unavailable")

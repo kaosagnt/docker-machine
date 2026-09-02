@@ -34,48 +34,53 @@ type GoogleCOSProvisioner struct {
 	SystemdProvisioner
 }
 
-// readinessMetadataCheck prints the opt-in metadata value on HTTP 200, prints
-// nothing on 404, and fails after bounded retries for every other outcome.
-const readinessMetadataCheck = `
-url=http://169.254.169.254/computeMetadata/v1/instance/attributes/gitlab-docker-network-readiness-gate
+const (
+	readinessGateMetadataKey = "gitlab-docker-network-readiness-gate"
+	readinessURLMetadataKey  = "gitlab-docker-network-readiness-url"
+)
+
+func metadataAttributeCheck(key string) string {
+	return `
+url=http://169.254.169.254/computeMetadata/v1/instance/attributes/` + key + `
 for attempt in 1 2 3; do
-	code=$(curl -s --max-time 3 -o /tmp/gitlab-readiness-gate -w '%{http_code}' -H 'Metadata-Flavor: Google' "$url") || {
+	code=$(curl -s --max-time 3 -o /tmp/gitlab-readiness-metadata -w '%{http_code}' -H 'Metadata-Flavor: Google' "$url") || {
 		sleep 1
 		continue
 	}
 	case "$code" in
 		404) exit 0 ;;
-		200) cat /tmp/gitlab-readiness-gate; exit 0 ;;
+		200) cat /tmp/gitlab-readiness-metadata; exit 0 ;;
 		403) echo 'GCE readiness metadata request was forbidden (HTTP 403)' >&2; exit 1 ;;
 	esac
 	sleep 1
 done
 echo 'GCE readiness metadata unavailable after 3 attempts' >&2
 exit 1`
+}
 
 const dockerNetworkVerifierImageCheck = `sudo docker image inspect alpine:latest >/dev/null`
 
-const (
-	dockerNetworkProbeContainer = "gitlab-docker-network-readiness-probe"
-	// dockerNetworkCheck uses a preloaded image and link-local endpoint so the
-	// readiness decision does not depend on DNS, a registry, or public egress.
-	dockerNetworkCheck = `sudo sh -c '
+const dockerNetworkProbeContainer = "gitlab-docker-network-readiness-probe"
+
+func dockerNetworkCheck(url string) string {
+	return `sudo sh -c '
 docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true
-timeout 10 docker run \
+timeout 15 docker run \
 	--name ` + dockerNetworkProbeContainer + ` \
 	--rm \
 	--pull=never \
 	--network bridge \
 	alpine:latest \
-	wget -qO- -T 3 \
-		--header="Metadata-Flavor: Google" \
-		http://169.254.169.254/computeMetadata/v1/instance/id \
-		>/dev/null
+	wget -S -q -O /dev/null -T 8 "$1" 2>&1 | grep -q "HTTP/"
 rc=$?
 docker rm -f ` + dockerNetworkProbeContainer + ` >/dev/null 2>&1 || true
 exit $rc
-'`
-)
+' probe ` + shellQuote(url) + ``
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
 
 // dockerNetworkDiagnosticsCmd is best-effort evidence collected before the
 // single repair restart. It intentionally continues when an individual probe
@@ -139,6 +144,10 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 	if err != nil {
 		return fmt.Errorf("determining whether the Google COS readiness gate is enabled: %w", err)
 	}
+	readinessURL, err := p.readinessURL()
+	if err != nil {
+		return fmt.Errorf("determining the Google COS readiness URL: %w", err)
+	}
 	if readinessEnabled {
 		log.Info("Waiting for cloud-init to finish before provisioning Docker")
 		if err := p.waitForCloudInit(); err != nil {
@@ -185,8 +194,8 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 		return err
 	}
 
-	if readinessEnabled {
-		if err := p.verifyDockerBridgeNetwork(); err != nil {
+	if readinessURL != "" {
+		if err := p.verifyDockerBridgeNetwork(readinessURL); err != nil {
 			return err
 		}
 	}
@@ -195,12 +204,21 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 }
 
 func (p *GoogleCOSProvisioner) readinessEnabled() (bool, error) {
-	out, err := p.SSHCommand(readinessMetadataCheck)
+	out, err := p.SSHCommand(metadataAttributeCheck(readinessGateMetadataKey))
 	if err != nil {
 		return false, fmt.Errorf("checking Google COS readiness metadata: %w", err)
 	}
 
 	return strings.TrimSpace(out) == "true", nil
+}
+
+func (p *GoogleCOSProvisioner) readinessURL() (string, error) {
+	out, err := p.SSHCommand(metadataAttributeCheck(readinessURLMetadataKey))
+	if err != nil {
+		return "", fmt.Errorf("checking Google COS readiness URL metadata: %w", err)
+	}
+
+	return strings.TrimSpace(out), nil
 }
 
 func (p *GoogleCOSProvisioner) waitForCloudInit() error {
@@ -215,16 +233,16 @@ func (p *GoogleCOSProvisioner) waitForCloudInit() error {
 	return nil
 }
 
-func (p *GoogleCOSProvisioner) verifyDockerBridgeNetwork() error {
-	return p.verifyDockerBridgeNetworkWithInterval(time.Second)
+func (p *GoogleCOSProvisioner) verifyDockerBridgeNetwork(url string) error {
+	return p.verifyDockerBridgeNetworkWithInterval(url, time.Second)
 }
 
-func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval time.Duration) error {
+func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(url string, interval time.Duration) error {
 	if _, err := p.SSHCommand(dockerNetworkVerifierImageCheck); err != nil {
 		return fmt.Errorf("Docker network verifier image alpine:latest is not present; refusing to run a registry-dependent readiness check: %w", err)
 	}
 
-	if p.waitForDockerNetwork(5, interval) {
+	if p.waitForDockerNetwork(url, 5, interval) {
 		return nil
 	}
 
@@ -245,7 +263,7 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval ti
 		p.stopDocker()
 		return fmt.Errorf("waiting for Docker after bridge network repair restart: %w", err)
 	}
-	if !p.waitForDockerNetwork(10, interval) {
+	if !p.waitForDockerNetwork(url, 10, interval) {
 		p.stopDocker()
 		return errors.New("Docker bridge network remained unavailable after one restart")
 	}
@@ -254,9 +272,10 @@ func (p *GoogleCOSProvisioner) verifyDockerBridgeNetworkWithInterval(interval ti
 	return nil
 }
 
-func (p *GoogleCOSProvisioner) waitForDockerNetwork(attempts int, interval time.Duration) bool {
+func (p *GoogleCOSProvisioner) waitForDockerNetwork(url string, attempts int, interval time.Duration) bool {
+	check := dockerNetworkCheck(url)
 	return mcnutils.WaitForSpecific(func() bool {
-		_, err := p.SSHCommand(dockerNetworkCheck)
+		_, err := p.SSHCommand(check)
 		return err == nil
 	}, attempts, interval) == nil
 }

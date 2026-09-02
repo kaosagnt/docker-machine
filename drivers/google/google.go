@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 type metadataMap map[string]string
 
 const cosDockerNetworkReadinessMetadataKey = "gitlab-docker-network-readiness-gate"
+const cosDockerNetworkReadinessURLMetadataKey = "gitlab-docker-network-readiness-url"
 
 type backoffFactory struct {
 	InitialInterval     time.Duration
@@ -69,6 +71,7 @@ type Driver struct {
 	MaintenancePolicy             string
 	SkipFirewall                  bool
 	COSDockerNetworkReadinessGate bool
+	COSDockerNetworkReadinessURL  string
 
 	// BulkInsert is the explicit opt-in for bulkInsert mode. Separate
 	// boolean rather than inferred from Region: keeps the provisioning
@@ -311,8 +314,13 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.BoolFlag{
 			Name:   "google-cos-docker-network-readiness-gate",
-			Usage:  "Wait for cloud-init and verify Docker bridge networking before marking a Google COS machine ready",
+			Usage:  "Wait for cloud-init to finish before configuring Docker on a Google COS machine",
 			EnvVar: "GOOGLE_COS_DOCKER_NETWORK_READINESS_GATE",
+		},
+		mcnflag.StringFlag{
+			Name:   "google-cos-docker-network-readiness-url",
+			Usage:  "If set, verify container egress on a Google COS machine by fetching this URL from a probe container before marking the machine ready. Independent of --google-cos-docker-network-readiness-gate.",
+			EnvVar: "GOOGLE_COS_DOCKER_NETWORK_READINESS_URL",
 		},
 		mcnflag.BoolFlag{
 			Name:   "google-bulk-insert",
@@ -429,6 +437,13 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		d.COSDockerNetworkReadinessGate = flags.Bool("google-cos-docker-network-readiness-gate")
 		if d.COSDockerNetworkReadinessGate {
 			d.Metadata[cosDockerNetworkReadinessMetadataKey] = "true"
+		}
+		d.COSDockerNetworkReadinessURL = flags.String("google-cos-docker-network-readiness-url")
+		if d.COSDockerNetworkReadinessURL != "" {
+			if err := validateReadinessURL(d.COSDockerNetworkReadinessURL); err != nil {
+				return err
+			}
+			d.Metadata[cosDockerNetworkReadinessURLMetadataKey] = d.COSDockerNetworkReadinessURL
 		}
 		d.MetadataFromFile = metadataMapFromStringSlice(flags.StringSlice("google-metadata-from-file"))
 		d.Accelerator = flags.String("google-accelerator")
@@ -547,6 +562,20 @@ func metadataMapFromStringSlice(slice []string) metadataMap {
 	}
 
 	return result
+}
+
+func validateReadinessURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid google-cos-docker-network-readiness-url %q: %w", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("google-cos-docker-network-readiness-url %q must be an http or https URL", raw)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("google-cos-docker-network-readiness-url %q must include a host", raw)
+	}
+	return nil
 }
 
 // PreCreateCheck is called to enforce pre-creation steps
