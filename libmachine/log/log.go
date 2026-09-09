@@ -15,7 +15,6 @@ const (
 
 var (
 	logger = NewFmtMachineLogger()
-	debug  bool
 
 	// (?s) enables '.' to match '\n' -- see https://golang.org/pkg/regexp/syntax/
 	certRegex = regexp.MustCompile("(?s)-----BEGIN CERTIFICATE-----.*-----END CERTIFICATE-----")
@@ -65,11 +64,11 @@ func Warnf(fmtString string, args ...any) {
 }
 
 func SetDebug(enabled bool) {
-	debug = enabled
 	logger.SetDebug(enabled)
 }
 
-// SetFormat replaces the package logger; history logged before the call is dropped.
+// SetFormat replaces the package logger. Call it before SetDebug and before
+// anything is logged: neither debug state nor history carries over.
 func SetFormat(format string) error {
 	switch format {
 	case "", FormatText:
@@ -79,7 +78,6 @@ func SetFormat(format string) error {
 	default:
 		return fmt.Errorf("unknown log format %q (expected %q or %q)", format, FormatText, FormatJSON)
 	}
-	logger.SetDebug(debug)
 	return nil
 }
 

@@ -112,17 +112,11 @@ func TestJSONLoggerHistoryIncludesSuppressedDebug(t *testing.T) {
 }
 
 func TestSetFormat(t *testing.T) {
-	defer func() {
-		logger = NewFmtMachineLogger()
-		debug = false
-	}()
-
-	SetDebug(true)
+	defer func() { logger = NewFmtMachineLogger() }()
 
 	require.NoError(t, SetFormat(FormatJSON))
-	jl, ok := logger.(*JSONMachineLogger)
+	_, ok := logger.(*JSONMachineLogger)
 	require.True(t, ok)
-	assert.True(t, jl.debug, "debug setting survives the logger swap")
 
 	require.NoError(t, SetFormat(""))
 	_, ok = logger.(*FmtMachineLogger)
