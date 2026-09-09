@@ -1,14 +1,21 @@
 package log
 
 import (
+	"fmt"
 	"io"
 	"regexp"
 )
 
 const redactedText = "<REDACTED>"
 
+const (
+	FormatText = "text"
+	FormatJSON = "json"
+)
+
 var (
 	logger = NewFmtMachineLogger()
+	debug  bool
 
 	// (?s) enables '.' to match '\n' -- see https://golang.org/pkg/regexp/syntax/
 	certRegex = regexp.MustCompile("(?s)-----BEGIN CERTIFICATE-----.*-----END CERTIFICATE-----")
@@ -57,8 +64,24 @@ func Warnf(fmtString string, args ...interface{}) {
 	logger.Warnf(fmtString, args...)
 }
 
-func SetDebug(debug bool) {
+func SetDebug(enabled bool) {
+	debug = enabled
+	logger.SetDebug(enabled)
+}
+
+// SetFormat replaces the package logger. Call it before anything is logged;
+// history recorded by the previous logger is not carried over.
+func SetFormat(format string) error {
+	switch format {
+	case "", FormatText:
+		logger = NewFmtMachineLogger()
+	case FormatJSON:
+		logger = NewJSONMachineLogger()
+	default:
+		return fmt.Errorf("unknown log format %q (expected %q or %q)", format, FormatText, FormatJSON)
+	}
 	logger.SetDebug(debug)
+	return nil
 }
 
 func SetOutWriter(out io.Writer) {
