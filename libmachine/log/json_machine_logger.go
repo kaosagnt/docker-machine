@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,12 +19,18 @@ type JSONMachineLogger struct {
 	debug     bool
 	history   *HistoryRecorder
 	now       func() time.Time
+
+	// phase is set from the create flow and read from the plugin output
+	// relay goroutine.
+	phaseMu sync.RWMutex
+	phase   string
 }
 
 type jsonLogEntry struct {
 	Time  string `json:"time"`
 	Level string `json:"level"`
 	Msg   string `json:"msg"`
+	Phase string `json:"phase,omitempty"`
 }
 
 // NewJSONMachineLogger creates a MachineLogger that emits JSON lines.
@@ -48,11 +55,22 @@ func (ml *JSONMachineLogger) SetErrWriter(err io.Writer) {
 	ml.errWriter = err
 }
 
+func (ml *JSONMachineLogger) SetPhase(phase string) {
+	ml.phaseMu.Lock()
+	ml.phase = phase
+	ml.phaseMu.Unlock()
+}
+
 func (ml *JSONMachineLogger) emit(w io.Writer, level, msg string) {
+	ml.phaseMu.RLock()
+	phase := ml.phase
+	ml.phaseMu.RUnlock()
+
 	entry := jsonLogEntry{
 		Time:  ml.now().UTC().Format(time.RFC3339Nano),
 		Level: level,
 		Msg:   msg,
+		Phase: phase,
 	}
 
 	data, err := json.Marshal(entry)

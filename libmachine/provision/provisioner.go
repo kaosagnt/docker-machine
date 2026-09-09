@@ -104,11 +104,13 @@ func DetectProvisioner(d drivers.Driver) (Provisioner, error) {
 }
 
 func (detector StandardDetector) DetectProvisioner(d drivers.Driver) (Provisioner, error) {
+	log.SetPhase("wait_ssh")
 	log.Info("Waiting for SSH to be available...")
 	if err := drivers.WaitForSSH(d); err != nil {
 		return nil, err
 	}
 
+	log.SetPhase("detect_os")
 	log.Info("Detecting the provisioner...")
 
 	// Reading /etc/os-release is an idempotent, read-only command run very early

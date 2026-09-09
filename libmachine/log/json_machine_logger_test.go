@@ -79,6 +79,26 @@ func TestJSONLoggerDebugOnlyWhenEnabled(t *testing.T) {
 	assert.Equal(t, "shown 1", entry["msg"])
 }
 
+func TestJSONLoggerPhase(t *testing.T) {
+	l, out, _ := newTestJSONLogger()
+
+	l.Info("before")
+	entry := decodeLine(t, out)
+	_, hasPhase := entry["phase"]
+	assert.False(t, hasPhase, "phase omitted until set")
+
+	out.Reset()
+	l.SetPhase("wait_ssh")
+	l.Infof("during %d", 1)
+	assert.Equal(t, "wait_ssh", decodeLine(t, out)["phase"])
+
+	out.Reset()
+	l.SetPhase("")
+	l.Warn("after")
+	_, hasPhase = decodeLine(t, out)["phase"]
+	assert.False(t, hasPhase)
+}
+
 func TestJSONLoggerHistoryIncludesSuppressedDebug(t *testing.T) {
 	l, _, _ := newTestJSONLogger()
 	l.Debug("debug")

@@ -84,6 +84,13 @@ func SetFormat(format string) error {
 	return nil
 }
 
+// SetPhase tags subsequent log entries with the create phase they belong
+// to. Consumers derive phase durations from the timestamps of the first
+// entry of consecutive phases. Rendered by the JSON format only.
+func SetPhase(phase string) {
+	logger.SetPhase(phase)
+}
+
 func SetOutWriter(out io.Writer) {
 	logger.SetOutWriter(out)
 }

@@ -35,6 +35,8 @@ func (ml *FmtMachineLogger) SetErrWriter(err io.Writer) {
 	ml.errWriter = err
 }
 
+func (ml *FmtMachineLogger) SetPhase(string) {}
+
 func (ml *FmtMachineLogger) Debug(args ...interface{}) {
 	ml.history.Record(args...)
 	if ml.debug {

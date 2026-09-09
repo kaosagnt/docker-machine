@@ -8,6 +8,10 @@ type MachineLogger interface {
 	SetOutWriter(io.Writer)
 	SetErrWriter(io.Writer)
 
+	// SetPhase tags subsequent entries with the create phase they belong
+	// to. Only structured loggers render it.
+	SetPhase(phase string)
+
 	Debug(args ...interface{})
 	Debugf(fmtString string, args ...interface{})
 
