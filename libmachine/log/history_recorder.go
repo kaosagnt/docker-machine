@@ -21,13 +21,13 @@ func (ml *HistoryRecorder) History() []string {
 	return ml.records
 }
 
-func (ml *HistoryRecorder) Record(args ...interface{}) {
+func (ml *HistoryRecorder) Record(args ...any) {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 	ml.records = append(ml.records, fmt.Sprint(args...))
 }
 
-func (ml *HistoryRecorder) Recordf(fmtString string, args ...interface{}) {
+func (ml *HistoryRecorder) Recordf(fmtString string, args ...any) {
 	ml.lock.Lock()
 	defer ml.lock.Unlock()
 	ml.records = append(ml.records, fmt.Sprintf(fmtString, args...))

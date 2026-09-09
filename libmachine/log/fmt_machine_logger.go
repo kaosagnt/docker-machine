@@ -3,8 +3,9 @@ package log
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -48,15 +49,9 @@ func (ml *FmtMachineLogger) format(msg string) string {
 	if len(ml.fields) == 0 {
 		return msg
 	}
-	keys := make([]string, 0, len(ml.fields))
-	for k := range ml.fields {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
 	var b strings.Builder
 	b.WriteString(msg)
-	for _, k := range keys {
+	for _, k := range slices.Sorted(maps.Keys(ml.fields)) {
 		fmt.Fprintf(&b, " %s=%v", k, ml.fields[k])
 	}
 	return b.String()
@@ -66,46 +61,46 @@ func (ml *FmtMachineLogger) print(w io.Writer, msg string) {
 	fmt.Fprintln(w, ml.format(msg))
 }
 
-func (ml *FmtMachineLogger) Debug(args ...interface{}) {
+func (ml *FmtMachineLogger) Debug(args ...any) {
 	ml.history.Record(args...)
 	if ml.debug {
 		ml.print(ml.errWriter, sprint(args...))
 	}
 }
 
-func (ml *FmtMachineLogger) Debugf(fmtString string, args ...interface{}) {
+func (ml *FmtMachineLogger) Debugf(fmtString string, args ...any) {
 	ml.history.Recordf(fmtString, args...)
 	if ml.debug {
 		ml.print(ml.errWriter, fmt.Sprintf(fmtString, args...))
 	}
 }
 
-func (ml *FmtMachineLogger) Error(args ...interface{}) {
+func (ml *FmtMachineLogger) Error(args ...any) {
 	ml.history.Record(args...)
 	ml.print(ml.errWriter, sprint(args...))
 }
 
-func (ml *FmtMachineLogger) Errorf(fmtString string, args ...interface{}) {
+func (ml *FmtMachineLogger) Errorf(fmtString string, args ...any) {
 	ml.history.Recordf(fmtString, args...)
 	ml.print(ml.errWriter, fmt.Sprintf(fmtString, args...))
 }
 
-func (ml *FmtMachineLogger) Info(args ...interface{}) {
+func (ml *FmtMachineLogger) Info(args ...any) {
 	ml.history.Record(args...)
 	ml.print(ml.outWriter, sprint(args...))
 }
 
-func (ml *FmtMachineLogger) Infof(fmtString string, args ...interface{}) {
+func (ml *FmtMachineLogger) Infof(fmtString string, args ...any) {
 	ml.history.Recordf(fmtString, args...)
 	ml.print(ml.outWriter, fmt.Sprintf(fmtString, args...))
 }
 
-func (ml *FmtMachineLogger) Warn(args ...interface{}) {
+func (ml *FmtMachineLogger) Warn(args ...any) {
 	ml.history.Record(args...)
 	ml.print(ml.outWriter, sprint(args...))
 }
 
-func (ml *FmtMachineLogger) Warnf(fmtString string, args ...interface{}) {
+func (ml *FmtMachineLogger) Warnf(fmtString string, args ...any) {
 	ml.history.Recordf(fmtString, args...)
 	ml.print(ml.outWriter, fmt.Sprintf(fmtString, args...))
 }

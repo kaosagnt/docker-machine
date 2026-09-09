@@ -32,35 +32,35 @@ func stripSecrets(original []string) []string {
 	return stripped
 }
 
-func Debug(args ...interface{}) {
+func Debug(args ...any) {
 	logger.Debug(args...)
 }
 
-func Debugf(fmtString string, args ...interface{}) {
+func Debugf(fmtString string, args ...any) {
 	logger.Debugf(fmtString, args...)
 }
 
-func Error(args ...interface{}) {
+func Error(args ...any) {
 	logger.Error(args...)
 }
 
-func Errorf(fmtString string, args ...interface{}) {
+func Errorf(fmtString string, args ...any) {
 	logger.Errorf(fmtString, args...)
 }
 
-func Info(args ...interface{}) {
+func Info(args ...any) {
 	logger.Info(args...)
 }
 
-func Infof(fmtString string, args ...interface{}) {
+func Infof(fmtString string, args ...any) {
 	logger.Infof(fmtString, args...)
 }
 
-func Warn(args ...interface{}) {
+func Warn(args ...any) {
 	logger.Warn(args...)
 }
 
-func Warnf(fmtString string, args ...interface{}) {
+func Warnf(fmtString string, args ...any) {
 	logger.Warnf(fmtString, args...)
 }
 
@@ -83,7 +83,7 @@ func SetFormat(format string) error {
 	return nil
 }
 
-func WithField(key string, value interface{}) MachineLogger {
+func WithField(key string, value any) MachineLogger {
 	return logger.WithFields(Fields{key: value})
 }
 

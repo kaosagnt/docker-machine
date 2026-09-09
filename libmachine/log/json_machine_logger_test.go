@@ -20,9 +20,9 @@ func newTestJSONLogger() (*JSONMachineLogger, *bytes.Buffer, *bytes.Buffer) {
 	return l, out, errOut
 }
 
-func decodeLine(t *testing.T, buf *bytes.Buffer) map[string]interface{} {
+func decodeLine(t *testing.T, buf *bytes.Buffer) map[string]any {
 	t.Helper()
-	var entry map[string]interface{}
+	var entry map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry), "raw: %q", buf.String())
 	return entry
 }

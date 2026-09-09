@@ -1,8 +1,10 @@
 package log
 
+import "maps"
+
 import "io"
 
-type Fields map[string]interface{}
+type Fields map[string]any
 
 type MachineLogger interface {
 	SetDebug(debug bool)
@@ -12,28 +14,24 @@ type MachineLogger interface {
 
 	WithFields(fields Fields) MachineLogger
 
-	Debug(args ...interface{})
-	Debugf(fmtString string, args ...interface{})
+	Debug(args ...any)
+	Debugf(fmtString string, args ...any)
 
-	Error(args ...interface{})
-	Errorf(fmtString string, args ...interface{})
+	Error(args ...any)
+	Errorf(fmtString string, args ...any)
 
-	Info(args ...interface{})
-	Infof(fmtString string, args ...interface{})
+	Info(args ...any)
+	Infof(fmtString string, args ...any)
 
-	Warn(args ...interface{})
-	Warnf(fmtString string, args ...interface{})
+	Warn(args ...any)
+	Warnf(fmtString string, args ...any)
 
 	History() []string
 }
 
 func mergeFields(base, extra Fields) Fields {
 	out := make(Fields, len(base)+len(extra))
-	for k, v := range base {
-		out[k] = v
-	}
-	for k, v := range extra {
-		out[k] = v
-	}
+	maps.Copy(out, base)
+	maps.Copy(out, extra)
 	return out
 }
