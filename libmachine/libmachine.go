@@ -120,8 +120,7 @@ func (api *Client) Create(h *host.Host) error {
 		return fmt.Errorf("Error generating certificates: %s", err)
 	}
 
-	log.SetPhase("pre_create")
-	log.Info("Running pre-create checks...")
+	log.WithField("phase", "pre_create").Info("Running pre-create checks...")
 
 	if err := h.Driver.PreCreateCheck(); err != nil {
 		return mcnerror.ErrDuringPreCreate{
@@ -133,8 +132,7 @@ func (api *Client) Create(h *host.Host) error {
 		return fmt.Errorf("Error saving host to store before attempting creation: %s", err)
 	}
 
-	log.SetPhase("driver_create")
-	log.Info("Creating machine...")
+	log.WithField("phase", "driver_create").Info("Creating machine...")
 
 	if err := api.performCreate(h); err != nil {
 		// Try to save machine when Create fails, it can store some critical information like DropletID
@@ -162,8 +160,7 @@ func (api *Client) performCreate(h *host.Host) error {
 		return nil
 	}
 
-	log.SetPhase("wait_running")
-	log.Info("Waiting for machine to be running, this may take a few minutes...")
+	log.WithField("phase", "wait_running").Info("Waiting for machine to be running, this may take a few minutes...")
 	if err := mcnutils.WaitFor(drivers.MachineInState(h.Driver, state.Running)); err != nil {
 		return fmt.Errorf("Error waiting for machine to be running: %s", err)
 	}
@@ -174,15 +171,13 @@ func (api *Client) performCreate(h *host.Host) error {
 		return fmt.Errorf("Error detecting OS: %s", err)
 	}
 
-	log.SetPhase("provision")
-	log.Infof("Provisioning with %s...", provisioner.String())
+	log.WithFields(log.Fields{"phase": "provision", "provisioner": provisioner.String()}).Info("Provisioning...")
 	if err := provisioner.Provision(*h.HostOptions.SwarmOptions, *h.HostOptions.AuthOptions, *h.HostOptions.EngineOptions); err != nil {
 		return fmt.Errorf("Error running provisioning: %s", err)
 	}
 
 	// We should check the connection to docker here
-	log.SetPhase("docker_check")
-	log.Info("Checking connection to Docker...")
+	log.WithField("phase", "docker_check").Info("Checking connection to Docker...")
 	if _, _, err = check.DefaultConnChecker.Check(h, false); err != nil {
 		return fmt.Errorf("Error checking the host: %s", err)
 	}

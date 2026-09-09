@@ -104,14 +104,12 @@ func DetectProvisioner(d drivers.Driver) (Provisioner, error) {
 }
 
 func (detector StandardDetector) DetectProvisioner(d drivers.Driver) (Provisioner, error) {
-	log.SetPhase("wait_ssh")
-	log.Info("Waiting for SSH to be available...")
+	log.WithField("phase", "wait_ssh").Info("Waiting for SSH to be available...")
 	if err := drivers.WaitForSSH(d); err != nil {
 		return nil, err
 	}
 
-	log.SetPhase("detect_os")
-	log.Info("Detecting the provisioner...")
+	log.WithField("phase", "detect_os").Info("Detecting the provisioner...")
 
 	// Reading /etc/os-release is an idempotent, read-only command run very early
 	// in the create — exactly when a transient mid-session SSH drop is most

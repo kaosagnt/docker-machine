@@ -63,8 +63,7 @@ Options:
    {{.}}{{end}}{{ end }}
 `
 
-// setLogFormat runs before cli parsing for the same reason as
-// setDebugOutputLevel: the version line below is logged before app.Run.
+// Runs before cli parsing, like setDebugOutputLevel, because the version line is logged before app.Run.
 func setLogFormat() {
 	format := os.Getenv("MACHINE_LOG_FORMAT")
 	for i, f := range os.Args {

@@ -79,24 +79,28 @@ func TestJSONLoggerDebugOnlyWhenEnabled(t *testing.T) {
 	assert.Equal(t, "shown 1", entry["msg"])
 }
 
-func TestJSONLoggerPhase(t *testing.T) {
+func TestJSONLoggerFields(t *testing.T) {
 	l, out, _ := newTestJSONLogger()
 
 	l.Info("before")
+	_, hasPhase := decodeLine(t, out)["phase"]
+	assert.False(t, hasPhase)
+
+	out.Reset()
+	l.WithFields(Fields{"phase": "wait_ssh", "attempt": 2}).Infof("during %d", 1)
 	entry := decodeLine(t, out)
-	_, hasPhase := entry["phase"]
-	assert.False(t, hasPhase, "phase omitted until set")
+	assert.Equal(t, "wait_ssh", entry["phase"])
+	assert.Equal(t, float64(2), entry["attempt"])
+	assert.Equal(t, "during 1", entry["msg"])
 
 	out.Reset()
-	l.SetPhase("wait_ssh")
-	l.Infof("during %d", 1)
-	assert.Equal(t, "wait_ssh", decodeLine(t, out)["phase"])
-
-	out.Reset()
-	l.SetPhase("")
 	l.Warn("after")
 	_, hasPhase = decodeLine(t, out)["phase"]
-	assert.False(t, hasPhase)
+	assert.False(t, hasPhase, "fields do not leak back into the parent logger")
+
+	out.Reset()
+	l.WithFields(Fields{"msg": "override"}).Info("real")
+	assert.Equal(t, "real", decodeLine(t, out)["msg"], "reserved keys win over fields")
 }
 
 func TestJSONLoggerHistoryIncludesSuppressedDebug(t *testing.T) {

@@ -69,8 +69,7 @@ func SetDebug(enabled bool) {
 	logger.SetDebug(enabled)
 }
 
-// SetFormat replaces the package logger. Call it before anything is logged;
-// history recorded by the previous logger is not carried over.
+// SetFormat replaces the package logger; history logged before the call is dropped.
 func SetFormat(format string) error {
 	switch format {
 	case "", FormatText:
@@ -84,11 +83,12 @@ func SetFormat(format string) error {
 	return nil
 }
 
-// SetPhase tags subsequent log entries with the create phase they belong
-// to. Consumers derive phase durations from the timestamps of the first
-// entry of consecutive phases. Rendered by the JSON format only.
-func SetPhase(phase string) {
-	logger.SetPhase(phase)
+func WithField(key string, value interface{}) MachineLogger {
+	return logger.WithFields(Fields{key: value})
+}
+
+func WithFields(fields Fields) MachineLogger {
+	return logger.WithFields(fields)
 }
 
 func SetOutWriter(out io.Writer) {
