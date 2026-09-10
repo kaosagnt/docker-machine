@@ -3,6 +3,7 @@ package log
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"testing"
 	"time"
 
@@ -123,4 +124,39 @@ func TestSetFormat(t *testing.T) {
 	assert.True(t, ok)
 
 	assert.Error(t, SetFormat("yaml"))
+}
+
+func TestHistoryIncludesFields(t *testing.T) {
+	for name, l := range map[string]MachineLogger{"json": NewJSONMachineLogger(), "text": NewFmtMachineLogger()} {
+		t.Run(name, func(t *testing.T) {
+			l.SetOutWriter(io.Discard)
+			l.SetErrWriter(io.Discard)
+			l.WithFields(Fields{"zone": "us-east1-c", "attempt": 2}).Info("placed")
+			l.Debug("hidden but recorded")
+			assert.Equal(t, []string{"placed attempt=2 zone=us-east1-c", "hidden but recorded"}, l.History())
+		})
+	}
+}
+
+func TestParseEntry(t *testing.T) {
+	level, msg, fields, ok := ParseEntry(`{"time":"2026-09-08T14:38:50Z","level":"warn","msg":"placed","zone":"us-east1-c"}`)
+	require.True(t, ok)
+	assert.Equal(t, "warn", level)
+	assert.Equal(t, "placed", msg)
+	assert.Equal(t, Fields{"zone": "us-east1-c"}, fields)
+
+	for _, line := range []string{"", "plain text", `{"level":"info"}`, `{"msg":`} {
+		_, _, _, ok := ParseEntry(line)
+		assert.False(t, ok, line)
+	}
+}
+
+func TestFormat(t *testing.T) {
+	defer func() { require.NoError(t, SetFormat(FormatText)) }()
+
+	assert.Equal(t, FormatText, Format())
+	require.NoError(t, SetFormat(FormatJSON))
+	assert.Equal(t, FormatJSON, Format())
+	assert.Error(t, SetFormat("yaml"))
+	assert.Equal(t, FormatJSON, Format(), "unchanged after a rejected format")
 }

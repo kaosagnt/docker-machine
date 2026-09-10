@@ -11,10 +11,13 @@ const redactedText = "<REDACTED>"
 const (
 	FormatText = "text"
 	FormatJSON = "json"
+
+	FormatEnvKey = "MACHINE_LOG_FORMAT"
 )
 
 var (
 	logger = NewFmtMachineLogger()
+	format = FormatText
 
 	// (?s) enables '.' to match '\n' -- see https://golang.org/pkg/regexp/syntax/
 	certRegex = regexp.MustCompile("(?s)-----BEGIN CERTIFICATE-----.*-----END CERTIFICATE-----")
@@ -69,16 +72,22 @@ func SetDebug(enabled bool) {
 
 // SetFormat replaces the package logger. Call it before SetDebug and before
 // anything is logged: neither debug state nor history carries over.
-func SetFormat(format string) error {
-	switch format {
+func SetFormat(f string) error {
+	switch f {
 	case "", FormatText:
 		logger = NewFmtMachineLogger()
+		format = FormatText
 	case FormatJSON:
 		logger = NewJSONMachineLogger()
+		format = FormatJSON
 	default:
-		return fmt.Errorf("unknown log format %q (expected %q or %q)", format, FormatText, FormatJSON)
+		return fmt.Errorf("unknown log format %q (expected %q or %q)", f, FormatText, FormatJSON)
 	}
 	return nil
+}
+
+func Format() string {
+	return format
 }
 
 func WithField(key string, value any) MachineLogger {

@@ -1,8 +1,12 @@
 package log
 
-import "maps"
-
-import "io"
+import (
+	"fmt"
+	"io"
+	"maps"
+	"slices"
+	"strings"
+)
 
 type Fields map[string]any
 
@@ -34,4 +38,22 @@ func mergeFields(base, extra Fields) Fields {
 	maps.Copy(out, base)
 	maps.Copy(out, extra)
 	return out
+}
+
+// renderFields appends "key=value" pairs in key order.
+func renderFields(msg string, fields Fields) string {
+	if len(fields) == 0 {
+		return msg
+	}
+	var b strings.Builder
+	b.WriteString(msg)
+	for _, k := range slices.Sorted(maps.Keys(fields)) {
+		fmt.Fprintf(&b, " %s=%v", k, fields[k])
+	}
+	return b.String()
+}
+
+// sprint matches fmt.Fprintln's spacing.
+func sprint(args ...any) string {
+	return strings.TrimSuffix(fmt.Sprintln(args...), "\n")
 }

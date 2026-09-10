@@ -154,6 +154,7 @@ func (lbe *Executor) Start() (*bufio.Scanner, *bufio.Scanner, error) {
 
 	os.Setenv(PluginEnvKey, PluginEnvVal)
 	os.Setenv(PluginEnvDriverName, lbe.DriverName)
+	os.Setenv(log.FormatEnvKey, log.Format())
 
 	if err := lbe.cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("Error starting plugin binary: %s", err)
@@ -212,9 +213,9 @@ func (lbp *Plugin) execServer() error {
 	for {
 		select {
 		case out := <-stdOutCh:
-			log.Infof(pluginOut, lbp.MachineName, out)
+			lbp.relay(out, false)
 		case err := <-stdErrCh:
-			log.Debugf(pluginErr, lbp.MachineName, err)
+			lbp.relay(err, true)
 		case <-lbp.stopCh:
 			if err := lbp.Executor.Close(); err != nil {
 				return fmt.Errorf("Error closing local plugin binary: %s", err)
@@ -249,4 +250,31 @@ func (lbp *Plugin) Address() (string, error) {
 func (lbp *Plugin) Close() error {
 	close(lbp.stopCh)
 	return nil
+}
+
+// relay forwards one line of plugin output through this process's logger.
+// In JSON mode the plugin emits JSON as well, so its fields are kept
+// instead of being flattened into the message text.
+func (lbp *Plugin) relay(line string, stderr bool) {
+	if log.Format() == log.FormatJSON {
+		if level, msg, fields, ok := log.ParseEntry(line); ok {
+			fields["machine"] = lbp.MachineName
+			logger := log.WithFields(fields)
+			switch {
+			case stderr:
+				logger.Debug(msg)
+			case level == "warn":
+				logger.Warn(msg)
+			default:
+				logger.Info(msg)
+			}
+			return
+		}
+	}
+
+	if stderr {
+		log.Debugf(pluginErr, lbp.MachineName, line)
+		return
+	}
+	log.Infof(pluginOut, lbp.MachineName, line)
 }

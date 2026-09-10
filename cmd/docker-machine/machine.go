@@ -65,7 +65,7 @@ Options:
 
 // Runs before cli parsing, like setDebugOutputLevel, because the version line is logged before app.Run.
 func setLogFormat() {
-	format := os.Getenv("MACHINE_LOG_FORMAT")
+	format := os.Getenv(log.FormatEnvKey)
 	for i, f := range os.Args {
 		if strings.HasPrefix(f, "--log-format=") {
 			format = strings.TrimPrefix(f, "--log-format=")
@@ -102,6 +102,9 @@ func setDebugOutputLevel() {
 
 func main() {
 	if os.Getenv(localbinary.PluginEnvKey) == localbinary.PluginEnvVal {
+		// The parent sets the format in the plugin's environment so both
+		// processes emit the same thing.
+		setLogFormat()
 		driverName := os.Getenv(localbinary.PluginEnvDriverName)
 		runDriver(driverName)
 		return
@@ -178,7 +181,7 @@ func main() {
 			Value:  "",
 		},
 		cli.StringFlag{
-			EnvVar: "MACHINE_LOG_FORMAT",
+			EnvVar: log.FormatEnvKey,
 			Name:   "log-format",
 			Usage:  "Log output format (text or json)",
 			Value:  log.FormatText,

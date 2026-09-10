@@ -6,7 +6,6 @@ import (
 	"io"
 	"maps"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -46,7 +45,12 @@ func (ml *JSONMachineLogger) WithFields(fields Fields) MachineLogger {
 	return &clone
 }
 
-func (ml *JSONMachineLogger) emit(w io.Writer, level, msg string) {
+func (ml *JSONMachineLogger) log(w io.Writer, level, msg string) {
+	ml.history.Record(renderFields(msg, ml.fields))
+	if w == nil {
+		return
+	}
+
 	entry := make(map[string]any, len(ml.fields)+3)
 	maps.Copy(entry, ml.fields)
 	entry["time"] = ml.now().UTC().Format(time.RFC3339Nano)
@@ -63,54 +67,66 @@ func (ml *JSONMachineLogger) emit(w io.Writer, level, msg string) {
 	w.Write(append(data, '\n'))
 }
 
-func sprint(args ...any) string {
-	return strings.TrimSuffix(fmt.Sprintln(args...), "\n")
+func (ml *JSONMachineLogger) debugWriter() io.Writer {
+	if ml.debug {
+		return ml.errWriter
+	}
+	return nil
 }
 
 func (ml *JSONMachineLogger) Debug(args ...any) {
-	ml.history.Record(args...)
-	if ml.debug {
-		ml.emit(ml.errWriter, "debug", sprint(args...))
-	}
+	ml.log(ml.debugWriter(), "debug", sprint(args...))
 }
 
 func (ml *JSONMachineLogger) Debugf(fmtString string, args ...any) {
-	ml.history.Recordf(fmtString, args...)
-	if ml.debug {
-		ml.emit(ml.errWriter, "debug", fmt.Sprintf(fmtString, args...))
-	}
+	ml.log(ml.debugWriter(), "debug", fmt.Sprintf(fmtString, args...))
 }
 
 func (ml *JSONMachineLogger) Error(args ...any) {
-	ml.history.Record(args...)
-	ml.emit(ml.errWriter, "error", sprint(args...))
+	ml.log(ml.errWriter, "error", sprint(args...))
 }
 
 func (ml *JSONMachineLogger) Errorf(fmtString string, args ...any) {
-	ml.history.Recordf(fmtString, args...)
-	ml.emit(ml.errWriter, "error", fmt.Sprintf(fmtString, args...))
+	ml.log(ml.errWriter, "error", fmt.Sprintf(fmtString, args...))
 }
 
 func (ml *JSONMachineLogger) Info(args ...any) {
-	ml.history.Record(args...)
-	ml.emit(ml.outWriter, "info", sprint(args...))
+	ml.log(ml.outWriter, "info", sprint(args...))
 }
 
 func (ml *JSONMachineLogger) Infof(fmtString string, args ...any) {
-	ml.history.Recordf(fmtString, args...)
-	ml.emit(ml.outWriter, "info", fmt.Sprintf(fmtString, args...))
+	ml.log(ml.outWriter, "info", fmt.Sprintf(fmtString, args...))
 }
 
 func (ml *JSONMachineLogger) Warn(args ...any) {
-	ml.history.Record(args...)
-	ml.emit(ml.outWriter, "warn", sprint(args...))
+	ml.log(ml.outWriter, "warn", sprint(args...))
 }
 
 func (ml *JSONMachineLogger) Warnf(fmtString string, args ...any) {
-	ml.history.Recordf(fmtString, args...)
-	ml.emit(ml.outWriter, "warn", fmt.Sprintf(fmtString, args...))
+	ml.log(ml.outWriter, "warn", fmt.Sprintf(fmtString, args...))
 }
 
 func (ml *JSONMachineLogger) History() []string {
 	return ml.history.records
+}
+
+// ParseEntry decodes a line written by JSONMachineLogger. ok is false for
+// anything else. time and level are stripped from the returned fields.
+func ParseEntry(line string) (level, msg string, fields Fields, ok bool) {
+	if len(line) == 0 || line[0] != '{' {
+		return "", "", nil, false
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return "", "", nil, false
+	}
+	msg, ok = raw["msg"].(string)
+	if !ok {
+		return "", "", nil, false
+	}
+	level, _ = raw["level"].(string)
+	delete(raw, "msg")
+	delete(raw, "level")
+	delete(raw, "time")
+	return level, msg, Fields(raw), true
 }
