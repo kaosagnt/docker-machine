@@ -46,11 +46,6 @@ func (ml *JSONMachineLogger) WithFields(fields Fields) MachineLogger {
 }
 
 func (ml *JSONMachineLogger) log(w io.Writer, level, msg string) {
-	ml.history.Record(renderFields(msg, ml.fields))
-	if w == nil {
-		return
-	}
-
 	entry := make(map[string]any, len(ml.fields)+3)
 	maps.Copy(entry, ml.fields)
 	entry["time"] = ml.now().UTC().Format(time.RFC3339Nano)
@@ -63,8 +58,11 @@ func (ml *JSONMachineLogger) log(w io.Writer, level, msg string) {
 		return
 	}
 
-	// Single Write so lines from concurrent goroutines don't interleave.
-	w.Write(append(data, '\n'))
+	ml.history.Record(string(data))
+	if w != nil {
+		// Single Write so lines from concurrent goroutines don't interleave.
+		w.Write(append(data, '\n'))
+	}
 }
 
 func (ml *JSONMachineLogger) debugWriter() io.Writer {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,12 +105,16 @@ func TestJSONLoggerFields(t *testing.T) {
 	assert.Equal(t, "real", decodeLine(t, out)["msg"], "reserved keys win over fields")
 }
 
-func TestJSONLoggerHistoryIncludesSuppressedDebug(t *testing.T) {
-	l, _, _ := newTestJSONLogger()
-	l.Debug("debug")
-	l.Info("info")
-	l.Error("error")
-	assert.Equal(t, []string{"debug", "info", "error"}, l.History())
+func TestJSONLoggerHistoryIsTheEmittedLine(t *testing.T) {
+	l, out, _ := newTestJSONLogger()
+	l.Debug("hidden")
+	l.WithFields(Fields{"zone": "us-east1-c"}).Info("placed")
+
+	history := l.History()
+	require.Len(t, history, 2)
+	assert.Equal(t, `{"level":"debug","msg":"hidden","time":"2026-09-08T14:38:52.864Z"}`, history[0])
+	assert.Equal(t, strings.TrimSuffix(out.String(), "\n"), history[1])
+	assert.Contains(t, history[1], `"zone":"us-east1-c"`)
 }
 
 func TestSetFormat(t *testing.T) {
@@ -126,16 +131,13 @@ func TestSetFormat(t *testing.T) {
 	assert.Error(t, SetFormat("yaml"))
 }
 
-func TestHistoryIncludesFields(t *testing.T) {
-	for name, l := range map[string]MachineLogger{"json": NewJSONMachineLogger(), "text": NewFmtMachineLogger()} {
-		t.Run(name, func(t *testing.T) {
-			l.SetOutWriter(io.Discard)
-			l.SetErrWriter(io.Discard)
-			l.WithFields(Fields{"zone": "us-east1-c", "attempt": 2}).Info("placed")
-			l.Debug("hidden but recorded")
-			assert.Equal(t, []string{"placed attempt=2 zone=us-east1-c", "hidden but recorded"}, l.History())
-		})
-	}
+func TestFmtLoggerHistoryIncludesFields(t *testing.T) {
+	l := NewFmtMachineLogger()
+	l.SetOutWriter(io.Discard)
+	l.SetErrWriter(io.Discard)
+	l.WithFields(Fields{"zone": "us-east1-c", "attempt": 2}).Info("placed")
+	l.Debug("hidden but recorded")
+	assert.Equal(t, []string{"placed attempt=2 zone=us-east1-c", "hidden but recorded"}, l.History())
 }
 
 func TestParseEntry(t *testing.T) {
