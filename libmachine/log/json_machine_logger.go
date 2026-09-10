@@ -59,17 +59,15 @@ func (ml *JSONMachineLogger) log(w io.Writer, level, msg string) {
 	}
 
 	ml.history.Record(string(data))
-	if w != nil {
-		// Single Write so lines from concurrent goroutines don't interleave.
-		w.Write(append(data, '\n'))
-	}
+	// Single Write so lines from concurrent goroutines don't interleave.
+	w.Write(append(data, '\n'))
 }
 
 func (ml *JSONMachineLogger) debugWriter() io.Writer {
 	if ml.debug {
 		return ml.errWriter
 	}
-	return nil
+	return io.Discard
 }
 
 func (ml *JSONMachineLogger) Debug(args ...any) {

@@ -54,16 +54,14 @@ func (ml *FmtMachineLogger) log(w io.Writer, msg string) {
 	line := b.String()
 
 	ml.history.Record(line)
-	if w != nil {
-		fmt.Fprintln(w, line)
-	}
+	fmt.Fprintln(w, line)
 }
 
 func (ml *FmtMachineLogger) debugWriter() io.Writer {
 	if ml.debug {
 		return ml.errWriter
 	}
-	return nil
+	return io.Discard
 }
 
 func (ml *FmtMachineLogger) Debug(args ...any) {
