@@ -73,7 +73,7 @@ func (ml *JSONMachineLogger) debugWriter() io.Writer {
 }
 
 func (ml *JSONMachineLogger) Debug(args ...any) {
-	ml.log(ml.debugWriter(), "debug", sprint(args...))
+	ml.log(ml.debugWriter(), "debug", fmt.Sprint(args...))
 }
 
 func (ml *JSONMachineLogger) Debugf(fmtString string, args ...any) {
@@ -81,7 +81,7 @@ func (ml *JSONMachineLogger) Debugf(fmtString string, args ...any) {
 }
 
 func (ml *JSONMachineLogger) Error(args ...any) {
-	ml.log(ml.errWriter, "error", sprint(args...))
+	ml.log(ml.errWriter, "error", fmt.Sprint(args...))
 }
 
 func (ml *JSONMachineLogger) Errorf(fmtString string, args ...any) {
@@ -89,7 +89,7 @@ func (ml *JSONMachineLogger) Errorf(fmtString string, args ...any) {
 }
 
 func (ml *JSONMachineLogger) Info(args ...any) {
-	ml.log(ml.outWriter, "info", sprint(args...))
+	ml.log(ml.outWriter, "info", fmt.Sprint(args...))
 }
 
 func (ml *JSONMachineLogger) Infof(fmtString string, args ...any) {
@@ -97,7 +97,7 @@ func (ml *JSONMachineLogger) Infof(fmtString string, args ...any) {
 }
 
 func (ml *JSONMachineLogger) Warn(args ...any) {
-	ml.log(ml.outWriter, "warn", sprint(args...))
+	ml.log(ml.outWriter, "warn", fmt.Sprint(args...))
 }
 
 func (ml *JSONMachineLogger) Warnf(fmtString string, args ...any) {

@@ -3,7 +3,10 @@ package log
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
+	"strings"
 )
 
 type FmtMachineLogger struct {
@@ -43,7 +46,13 @@ func (ml *FmtMachineLogger) WithFields(fields Fields) MachineLogger {
 }
 
 func (ml *FmtMachineLogger) log(w io.Writer, msg string) {
-	line := renderFields(msg, ml.fields)
+	var b strings.Builder
+	b.WriteString(msg)
+	for _, k := range slices.Sorted(maps.Keys(ml.fields)) {
+		fmt.Fprintf(&b, " %s=%v", k, ml.fields[k])
+	}
+	line := b.String()
+
 	ml.history.Record(line)
 	if w != nil {
 		fmt.Fprintln(w, line)
@@ -58,7 +67,7 @@ func (ml *FmtMachineLogger) debugWriter() io.Writer {
 }
 
 func (ml *FmtMachineLogger) Debug(args ...any) {
-	ml.log(ml.debugWriter(), sprint(args...))
+	ml.log(ml.debugWriter(), fmt.Sprint(args...))
 }
 
 func (ml *FmtMachineLogger) Debugf(fmtString string, args ...any) {
@@ -66,7 +75,7 @@ func (ml *FmtMachineLogger) Debugf(fmtString string, args ...any) {
 }
 
 func (ml *FmtMachineLogger) Error(args ...any) {
-	ml.log(ml.errWriter, sprint(args...))
+	ml.log(ml.errWriter, fmt.Sprint(args...))
 }
 
 func (ml *FmtMachineLogger) Errorf(fmtString string, args ...any) {
@@ -74,7 +83,7 @@ func (ml *FmtMachineLogger) Errorf(fmtString string, args ...any) {
 }
 
 func (ml *FmtMachineLogger) Info(args ...any) {
-	ml.log(ml.outWriter, sprint(args...))
+	ml.log(ml.outWriter, fmt.Sprint(args...))
 }
 
 func (ml *FmtMachineLogger) Infof(fmtString string, args ...any) {
@@ -82,7 +91,7 @@ func (ml *FmtMachineLogger) Infof(fmtString string, args ...any) {
 }
 
 func (ml *FmtMachineLogger) Warn(args ...any) {
-	ml.log(ml.outWriter, sprint(args...))
+	ml.log(ml.outWriter, fmt.Sprint(args...))
 }
 
 func (ml *FmtMachineLogger) Warnf(fmtString string, args ...any) {

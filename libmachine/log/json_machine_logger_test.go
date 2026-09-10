@@ -37,7 +37,7 @@ func TestJSONLoggerLevelsAndStreams(t *testing.T) {
 		msg    string
 		stderr bool
 	}{
-		{"info", func(l MachineLogger) { l.Info("Waiting for", "SSH") }, "info", "Waiting for SSH", false},
+		{"info", func(l MachineLogger) { l.Info("Waiting for SSH: ", 3) }, "info", "Waiting for SSH: 3", false},
 		{"infof", func(l MachineLogger) { l.Infof("placed in %s", "us-east1-d") }, "info", "placed in us-east1-d", false},
 		{"warn", func(l MachineLogger) { l.Warn("careful") }, "warn", "careful", false},
 		{"warnf", func(l MachineLogger) { l.Warnf("attempt %d", 2) }, "warn", "attempt 2", false},
