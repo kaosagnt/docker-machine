@@ -29,6 +29,7 @@ const (
 	PluginEnvKey        = "MACHINE_PLUGIN_TOKEN"
 	PluginEnvVal        = "42"
 	PluginEnvDriverName = "MACHINE_PLUGIN_DRIVER_NAME"
+	PluginEnvLogFormat  = "MACHINE_PLUGIN_LOG_FORMAT"
 )
 
 type PluginStreamer interface {
@@ -154,7 +155,7 @@ func (lbe *Executor) Start() (*bufio.Scanner, *bufio.Scanner, error) {
 
 	os.Setenv(PluginEnvKey, PluginEnvVal)
 	os.Setenv(PluginEnvDriverName, lbe.DriverName)
-	os.Setenv(log.FormatEnvKey, log.Format())
+	os.Setenv(PluginEnvLogFormat, log.Format())
 
 	if err := lbe.cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("Error starting plugin binary: %s", err)

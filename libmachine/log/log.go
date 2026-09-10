@@ -11,8 +11,6 @@ const redactedText = "<REDACTED>"
 const (
 	FormatText = "text"
 	FormatJSON = "json"
-
-	FormatEnvKey = "MACHINE_LOG_FORMAT"
 )
 
 var (
