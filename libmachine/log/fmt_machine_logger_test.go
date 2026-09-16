@@ -95,3 +95,15 @@ func TestEntriesAreCollected(t *testing.T) {
 	assert.Equal(t, "info", testLogger.History()[1])
 	assert.Equal(t, "error", testLogger.History()[2])
 }
+
+func TestFmtLoggerRendersFields(t *testing.T) {
+	testLogger := NewFmtMachineLogger()
+
+	result := captureOutput(testLogger, func() {
+		testLogger.WithFields(Fields{"zone": "us-east1-d", "attempt": 2}).Info("bulkInsert placed")
+	})
+	assert.Equal(t, "bulkInsert placed attempt=2 zone=us-east1-d", result)
+
+	result = captureOutput(testLogger, func() { testLogger.Info("plain") })
+	assert.Equal(t, "plain", result)
+}

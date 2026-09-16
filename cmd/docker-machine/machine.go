@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"path/filepath"
 
@@ -62,6 +63,23 @@ Options:
    {{.}}{{end}}{{ end }}
 `
 
+// Runs before cli parsing, like setDebugOutputLevel, because the version line is logged before app.Run.
+func setLogFormat() {
+	format := os.Getenv("MACHINE_LOG_FORMAT")
+	for i, f := range os.Args {
+		if strings.HasPrefix(f, "--log-format=") {
+			format = strings.TrimPrefix(f, "--log-format=")
+		} else if f == "--log-format" && i+1 < len(os.Args) {
+			format = os.Args[i+1]
+		}
+	}
+
+	if err := log.SetFormat(format); err != nil {
+		fmt.Fprintf(os.Stderr, "Error setting log format: %s\n", err)
+		os.Exit(1)
+	}
+}
+
 func setDebugOutputLevel() {
 	// TODO: I'm not really a fan of this method and really would rather
 	// use -v / --verbose TBQH
@@ -84,6 +102,10 @@ func setDebugOutputLevel() {
 
 func main() {
 	if os.Getenv(localbinary.PluginEnvKey) == localbinary.PluginEnvVal {
+		if err := log.SetFormat(os.Getenv(localbinary.PluginEnvLogFormat)); err != nil {
+			fmt.Fprintf(os.Stderr, "Error setting log format: %s\n", err)
+			os.Exit(1)
+		}
 		driverName := os.Getenv(localbinary.PluginEnvDriverName)
 		runDriver(driverName)
 		return
@@ -91,6 +113,7 @@ func main() {
 
 	localbinary.CurrentBinaryIsDockerMachine = true
 
+	setLogFormat()
 	setDebugOutputLevel()
 	cli.AppHelpTemplate = AppHelpTemplate
 	cli.CommandHelpTemplate = CommandHelpTemplate
@@ -157,6 +180,12 @@ func main() {
 			Name:   "bugsnag-api-token",
 			Usage:  "BugSnag API token for crash reporting",
 			Value:  "",
+		},
+		cli.StringFlag{
+			EnvVar: "MACHINE_LOG_FORMAT",
+			Name:   "log-format",
+			Usage:  "Log output format (text or json)",
+			Value:  log.FormatText,
 		},
 	}
 

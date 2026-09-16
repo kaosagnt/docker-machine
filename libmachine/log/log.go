@@ -1,14 +1,21 @@
 package log
 
 import (
+	"fmt"
 	"io"
 	"regexp"
 )
 
 const redactedText = "<REDACTED>"
 
+const (
+	FormatText = "text"
+	FormatJSON = "json"
+)
+
 var (
 	logger = NewFmtMachineLogger()
+	format = FormatText
 
 	// (?s) enables '.' to match '\n' -- see https://golang.org/pkg/regexp/syntax/
 	certRegex = regexp.MustCompile("(?s)-----BEGIN CERTIFICATE-----.*-----END CERTIFICATE-----")
@@ -25,40 +32,68 @@ func stripSecrets(original []string) []string {
 	return stripped
 }
 
-func Debug(args ...interface{}) {
+func Debug(args ...any) {
 	logger.Debug(args...)
 }
 
-func Debugf(fmtString string, args ...interface{}) {
+func Debugf(fmtString string, args ...any) {
 	logger.Debugf(fmtString, args...)
 }
 
-func Error(args ...interface{}) {
+func Error(args ...any) {
 	logger.Error(args...)
 }
 
-func Errorf(fmtString string, args ...interface{}) {
+func Errorf(fmtString string, args ...any) {
 	logger.Errorf(fmtString, args...)
 }
 
-func Info(args ...interface{}) {
+func Info(args ...any) {
 	logger.Info(args...)
 }
 
-func Infof(fmtString string, args ...interface{}) {
+func Infof(fmtString string, args ...any) {
 	logger.Infof(fmtString, args...)
 }
 
-func Warn(args ...interface{}) {
+func Warn(args ...any) {
 	logger.Warn(args...)
 }
 
-func Warnf(fmtString string, args ...interface{}) {
+func Warnf(fmtString string, args ...any) {
 	logger.Warnf(fmtString, args...)
 }
 
-func SetDebug(debug bool) {
-	logger.SetDebug(debug)
+func SetDebug(enabled bool) {
+	logger.SetDebug(enabled)
+}
+
+// SetFormat replaces the package logger. Call it before SetDebug and before
+// anything is logged: neither debug state nor history carries over.
+func SetFormat(f string) error {
+	switch f {
+	case "", FormatText:
+		logger = NewFmtMachineLogger()
+		format = FormatText
+	case FormatJSON:
+		logger = NewJSONMachineLogger()
+		format = FormatJSON
+	default:
+		return fmt.Errorf("unknown log format %q (expected %q or %q)", f, FormatText, FormatJSON)
+	}
+	return nil
+}
+
+func Format() string {
+	return format
+}
+
+func WithField(key string, value any) MachineLogger {
+	return logger.WithFields(Fields{key: value})
+}
+
+func WithFields(fields Fields) MachineLogger {
+	return logger.WithFields(fields)
 }
 
 func SetOutWriter(out io.Writer) {

@@ -150,11 +150,16 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 	health := newPlacementHealth(d, time.Now)
 	selections = health.order(d, selections)
 
-	log.Infof("Creating instance via bulkInsert in %q across %d eligible selection(s)", c.region(), len(selections))
+	log.WithFields(log.Fields{"region": c.region(), "selections": len(selections)}).Info("Creating instance via bulkInsert")
 
 	stockoutErrs := make([]error, 0, len(selections))
 	for i, sel := range selections {
-		log.Infof("bulkInsert attempt %d/%d: machine-type=%q disk-type=%q", i+1, len(selections), sel.MachineType, sel.DiskType)
+		log.WithFields(log.Fields{
+			"attempt":      i + 1,
+			"attempts":     len(selections),
+			"machine_type": sel.MachineType,
+			"disk_type":    sel.DiskType,
+		}).Info("bulkInsert attempt")
 		retryable, attemptErr := c.attemptBulkInsertForSelection(d, sel)
 		observedAt := time.Now()
 		if attemptErr == nil {
@@ -169,7 +174,12 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			}
 			return attemptErr
 		}
-		log.Warnf("bulkInsert selection %d/%d (%s) hit stockout-class failure, falling through: %v", i+1, len(selections), sel.MachineType, attemptErr)
+		log.WithFields(log.Fields{
+			"attempt":      i + 1,
+			"attempts":     len(selections),
+			"machine_type": sel.MachineType,
+			"error":        attemptErr.Error(),
+		}).Warn("bulkInsert selection hit stockout-class failure, falling through")
 		if err := health.recordStockoutAt(d, sel, observedAt); err != nil {
 			log.Warnf("Could not record bulkInsert stockout health: %v", err)
 		}
@@ -266,7 +276,7 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 		return false, fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, c.region())
 	}
 
-	log.Infof("Waiting for bulkInsert operation %s", op.Name)
+	log.WithField("operation", op.Name).Info("Waiting for bulkInsert operation")
 	doneOp, waitErr := c.waitForRegionOpResult(op.Name)
 	if waitErr != nil {
 		// The operation failed overall, but it may still have placed the
@@ -770,7 +780,7 @@ func (c *ComputeUtil) finishPostCreate(d *Driver) error {
 	}
 
 	c.syncResolvedMachineType(d, instance)
-	log.Infof("bulkInsert placed as %s in %s", d.ResolvedMachineType, d.ResolvedZone)
+	log.WithFields(log.Fields{"machine_type": d.ResolvedMachineType, "zone": d.ResolvedZone}).Info("bulkInsert placed")
 
 	if err := c.addFirewallTag(instance); err != nil {
 		return fmt.Errorf("adding firewall tag to bulkInsert instance %q: %w", c.instanceName, err)
