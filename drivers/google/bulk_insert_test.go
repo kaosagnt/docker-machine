@@ -1145,3 +1145,34 @@ func TestAttemptBulkInsertForSelection_SalvagesZoneOnOpError(t *testing.T) {
 	// placedZone (the success-path field) must NOT be set on a failed op.
 	assert.Empty(t, c.placedZone)
 }
+
+func TestBuildBulkInsertInstanceProperties_ServiceAccount(t *testing.T) {
+	c := &ComputeUtil{
+		project:        "p",
+		networkProject: "p",
+		diskTypeURL:    "pd-balanced",
+		globalURL:      apiURL + "p/global",
+	}
+	sel := flexSelection{MachineType: "n2d-standard-2"}
+	newDriver := func(noSA bool) *Driver {
+		return &Driver{
+			MachineImage:     "ubuntu-os-cloud/global/images/ubuntu-2204",
+			DiskSize:         20,
+			DiskType:         "pd-balanced",
+			Network:          "default",
+			ServiceAccount:   defaultServiceAccount,
+			NoServiceAccount: noSA,
+			Scopes:           defaultScopes,
+		}
+	}
+
+	props, err := c.buildBulkInsertInstanceProperties(newDriver(false), sel)
+	require.NoError(t, err)
+	require.Len(t, props.ServiceAccounts, 1)
+	assert.Equal(t, defaultServiceAccount, props.ServiceAccounts[0].Email)
+	assert.Equal(t, strings.Split(defaultScopes, ","), props.ServiceAccounts[0].Scopes)
+
+	props, err = c.buildBulkInsertInstanceProperties(newDriver(true), sel)
+	require.NoError(t, err)
+	assert.Nil(t, props.ServiceAccounts)
+}
