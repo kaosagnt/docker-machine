@@ -437,6 +437,9 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		d.ServiceAccount = flags.String("google-service-account")
 		d.NoServiceAccount = flags.Bool("google-no-service-account")
 		d.Scopes = flags.String("google-scopes")
+		if d.NoServiceAccount && (d.ServiceAccount != defaultServiceAccount || d.Scopes != defaultScopes) {
+			log.Warn("--google-no-service-account is set, ignoring --google-service-account and --google-scopes")
+		}
 		d.Tags = flags.String("google-tags")
 		d.OpenPorts = flags.StringSlice("google-open-port")
 		d.Labels = flags.StringSlice("google-label")
