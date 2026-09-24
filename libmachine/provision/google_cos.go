@@ -35,8 +35,8 @@ type GoogleCOSProvisioner struct {
 }
 
 const (
-	readinessGateMetadataKey = "gitlab-docker-network-readiness-gate"
-	readinessURLMetadataKey  = "gitlab-docker-network-readiness-url"
+	waitForCloudInitMetadataKey = "gitlab-wait-for-cloud-init"
+	readinessURLMetadataKey     = "gitlab-docker-network-readiness-url"
 )
 
 func metadataAttributeCheck(key string) string {
@@ -146,15 +146,15 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 	p.EngineOptions = engineOptions
 	swarmOptions.Env = engineOptions.Env
 
-	readinessEnabled, err := p.readinessEnabled()
+	waitForCloudInit, err := p.waitForCloudInitEnabled()
 	if err != nil {
-		return fmt.Errorf("determining whether the Google COS readiness gate is enabled: %w", err)
+		return fmt.Errorf("determining whether to wait for cloud-init on the Google COS machine: %w", err)
 	}
 	readinessURL, err := p.readinessURL()
 	if err != nil {
 		return fmt.Errorf("determining the Google COS readiness URL: %w", err)
 	}
-	if readinessEnabled {
+	if waitForCloudInit {
 		log.Info("Waiting for cloud-init to finish before provisioning Docker")
 		if err := p.waitForCloudInit(); err != nil {
 			return err
@@ -209,10 +209,10 @@ func (p *GoogleCOSProvisioner) Provision(swarmOptions swarm.Options, authOptions
 	return nil
 }
 
-func (p *GoogleCOSProvisioner) readinessEnabled() (bool, error) {
-	out, err := p.SSHCommand(metadataAttributeCheck(readinessGateMetadataKey))
+func (p *GoogleCOSProvisioner) waitForCloudInitEnabled() (bool, error) {
+	out, err := p.SSHCommand(metadataAttributeCheck(waitForCloudInitMetadataKey))
 	if err != nil {
-		return false, fmt.Errorf("checking Google COS readiness metadata: %w", err)
+		return false, fmt.Errorf("checking Google COS wait-for-cloud-init metadata: %w", err)
 	}
 
 	return strings.TrimSpace(out) == "true", nil
@@ -233,7 +233,7 @@ func (p *GoogleCOSProvisioner) waitForCloudInit() error {
 		if out != "" {
 			log.Debugf("cloud-init status output:\n%s", out)
 		}
-		return fmt.Errorf("waiting for cloud-init readiness gate: %w", err)
+		return fmt.Errorf("waiting for cloud-init: %w", err)
 	}
 
 	if strings.Contains(out, "degraded") {

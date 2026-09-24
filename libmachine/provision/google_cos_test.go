@@ -40,34 +40,34 @@ func newGoogleCOSProvisionerForTest(commander SSHCommander) *GoogleCOSProvisione
 	return p
 }
 
-func TestGoogleCOSReadinessEnabled(t *testing.T) {
+func TestGoogleCOSWaitForCloudInitEnabled(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		metadataAttributeCheck(readinessGateMetadataKey): {{out: "true\n"}},
+		metadataAttributeCheck(waitForCloudInitMetadataKey): {{out: "true\n"}},
 	}}
 
-	enabled, err := newGoogleCOSProvisionerForTest(commander).readinessEnabled()
+	enabled, err := newGoogleCOSProvisionerForTest(commander).waitForCloudInitEnabled()
 
 	require.NoError(t, err)
 	assert.True(t, enabled)
 }
 
-func TestGoogleCOSReadinessDisabled(t *testing.T) {
+func TestGoogleCOSWaitForCloudInitDisabled(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		metadataAttributeCheck(readinessGateMetadataKey): {{out: ""}},
+		metadataAttributeCheck(waitForCloudInitMetadataKey): {{out: ""}},
 	}}
 
-	enabled, err := newGoogleCOSProvisionerForTest(commander).readinessEnabled()
+	enabled, err := newGoogleCOSProvisionerForTest(commander).waitForCloudInitEnabled()
 
 	require.NoError(t, err)
 	assert.False(t, enabled)
 }
 
-func TestGoogleCOSReadinessMetadataFailure(t *testing.T) {
+func TestGoogleCOSWaitForCloudInitMetadataFailure(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		metadataAttributeCheck(readinessGateMetadataKey): {{err: errors.New("metadata unavailable")}},
+		metadataAttributeCheck(waitForCloudInitMetadataKey): {{err: errors.New("metadata unavailable")}},
 	}}
 
-	enabled, err := newGoogleCOSProvisionerForTest(commander).readinessEnabled()
+	enabled, err := newGoogleCOSProvisionerForTest(commander).waitForCloudInitEnabled()
 
 	require.Error(t, err)
 	assert.False(t, enabled)
@@ -125,7 +125,7 @@ func TestShellQuoteSurvivesTwoShellLayers(t *testing.T) {
 }
 
 func TestReadinessMetadataCheckShellSyntax(t *testing.T) {
-	require.NoError(t, exec.Command("sh", "-n", "-c", metadataAttributeCheck(readinessGateMetadataKey)).Run())
+	require.NoError(t, exec.Command("sh", "-n", "-c", metadataAttributeCheck(waitForCloudInitMetadataKey)).Run())
 }
 
 func TestDockerNetworkDiagnosticsShellSyntax(t *testing.T) {
@@ -143,7 +143,7 @@ func TestGoogleCOSCloudInitFailure(t *testing.T) {
 	err := newGoogleCOSProvisionerForTest(commander).waitForCloudInit()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "waiting for cloud-init readiness gate")
+	assert.Contains(t, err.Error(), "waiting for cloud-init")
 }
 
 func TestGoogleCOSCloudInitDegradedDone(t *testing.T) {

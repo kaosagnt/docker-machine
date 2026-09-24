@@ -19,7 +19,7 @@ import (
 
 type metadataMap map[string]string
 
-const cosDockerNetworkReadinessMetadataKey = "gitlab-docker-network-readiness-gate"
+const cosWaitForCloudInitMetadataKey = "gitlab-wait-for-cloud-init"
 const cosDockerNetworkReadinessURLMetadataKey = "gitlab-docker-network-readiness-url"
 
 type backoffFactory struct {
@@ -44,34 +44,34 @@ func (bf *backoffFactory) create() *backoff.ExponentialBackOff {
 // Driver is a struct compatible with the docker.hosts.drivers.Driver interface.
 type Driver struct {
 	*drivers.BaseDriver
-	Zone                          string
-	MachineType                   string
-	MinCPUPlatform                string
-	MachineImage                  string
-	DiskType                      string
-	Address                       string
-	Network                       string
-	Subnetwork                    string
-	Preemptible                   bool
-	UseInternalIP                 bool
-	UseInternalIPOnly             bool
-	ServiceAccount                string
-	Scopes                        string
-	DiskSize                      int
-	ProvisionedIops               int
-	ProvisionedThroughput         int
-	Project                       string
-	Tags                          string
-	UseExisting                   bool
-	OpenPorts                     []string
-	Labels                        []string
-	Metadata                      metadataMap
-	MetadataFromFile              metadataMap
-	Accelerator                   string
-	MaintenancePolicy             string
-	SkipFirewall                  bool
-	COSDockerNetworkReadinessGate bool
-	COSDockerNetworkReadinessURL  string
+	Zone                         string
+	MachineType                  string
+	MinCPUPlatform               string
+	MachineImage                 string
+	DiskType                     string
+	Address                      string
+	Network                      string
+	Subnetwork                   string
+	Preemptible                  bool
+	UseInternalIP                bool
+	UseInternalIPOnly            bool
+	ServiceAccount               string
+	Scopes                       string
+	DiskSize                     int
+	ProvisionedIops              int
+	ProvisionedThroughput        int
+	Project                      string
+	Tags                         string
+	UseExisting                  bool
+	OpenPorts                    []string
+	Labels                       []string
+	Metadata                     metadataMap
+	MetadataFromFile             metadataMap
+	Accelerator                  string
+	MaintenancePolicy            string
+	SkipFirewall                 bool
+	COSWaitForCloudInit          bool
+	COSDockerNetworkReadinessURL string
 
 	// BulkInsert is the explicit opt-in for bulkInsert mode. Separate
 	// boolean rather than inferred from Region: keeps the provisioning
@@ -313,13 +313,18 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			EnvVar: "GOOGLE_SKIP_FIREWALL_CREATE",
 		},
 		mcnflag.BoolFlag{
-			Name:   "google-cos-docker-network-readiness-gate",
+			Name:   "google-cos-wait-for-cloud-init",
 			Usage:  "Wait for cloud-init to finish before configuring Docker on a Google COS machine",
+			EnvVar: "GOOGLE_COS_WAIT_FOR_CLOUD_INIT",
+		},
+		mcnflag.BoolFlag{
+			Name:   "google-cos-docker-network-readiness-gate",
+			Usage:  "Deprecated: use --google-cos-wait-for-cloud-init",
 			EnvVar: "GOOGLE_COS_DOCKER_NETWORK_READINESS_GATE",
 		},
 		mcnflag.StringFlag{
 			Name:   "google-cos-docker-network-readiness-url",
-			Usage:  "If set, verify container egress on a Google COS machine by fetching this URL from a probe container before marking the machine ready. Independent of --google-cos-docker-network-readiness-gate.",
+			Usage:  "If set, verify container egress on a Google COS machine by fetching this URL from a probe container before marking the machine ready. Independent of --google-cos-wait-for-cloud-init.",
 			EnvVar: "GOOGLE_COS_DOCKER_NETWORK_READINESS_URL",
 		},
 		mcnflag.BoolFlag{
@@ -434,9 +439,12 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		d.OpenPorts = flags.StringSlice("google-open-port")
 		d.Labels = flags.StringSlice("google-label")
 		d.Metadata = metadataMapFromStringSlice(flags.StringSlice("google-metadata"))
-		d.COSDockerNetworkReadinessGate = flags.Bool("google-cos-docker-network-readiness-gate")
-		if d.COSDockerNetworkReadinessGate {
-			d.Metadata[cosDockerNetworkReadinessMetadataKey] = "true"
+		if flags.Bool("google-cos-docker-network-readiness-gate") {
+			log.Warn("--google-cos-docker-network-readiness-gate is deprecated, use --google-cos-wait-for-cloud-init")
+		}
+		d.COSWaitForCloudInit = flags.Bool("google-cos-wait-for-cloud-init") || flags.Bool("google-cos-docker-network-readiness-gate")
+		if d.COSWaitForCloudInit {
+			d.Metadata[cosWaitForCloudInitMetadataKey] = "true"
 		}
 		d.COSDockerNetworkReadinessURL = flags.String("google-cos-docker-network-readiness-url")
 		if d.COSDockerNetworkReadinessURL != "" {
