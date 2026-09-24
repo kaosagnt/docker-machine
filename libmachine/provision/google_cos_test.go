@@ -160,10 +160,6 @@ func TestGoogleCOSCloudInitWaitShellSyntax(t *testing.T) {
 	require.NoError(t, exec.Command("sh", "-n", "-c", cloudInitWaitCmd).Run())
 }
 
-// Runs the remote shell snippet with fake sudo, timeout, systemctl and cloud-init:
-// after the target wait, cloud-init's exit 0 and 2 (degraded done) pass and 1 is
-// returned as is; a timeout (124) or systemctl failure returns before cloud-init
-// status is consulted.
 func TestGoogleCOSCloudInitWaitExitCodes(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
