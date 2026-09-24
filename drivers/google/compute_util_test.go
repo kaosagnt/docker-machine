@@ -23,6 +23,14 @@ import (
 	"google.golang.org/api/option"
 )
 
+func TestServiceAccounts(t *testing.T) {
+	d := &Driver{ServiceAccount: "sa@p.iam.gserviceaccount.com", Scopes: "a,b"}
+	assert.Equal(t, []*raw.ServiceAccount{{Email: "sa@p.iam.gserviceaccount.com", Scopes: []string{"a", "b"}}}, serviceAccounts(d))
+
+	d.NoServiceAccount = true
+	assert.Nil(t, serviceAccounts(d))
+}
+
 func TestDefaultTag(t *testing.T) {
 	tags := parseTags(&Driver{Tags: ""})
 
