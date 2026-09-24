@@ -229,17 +229,11 @@ func (p *GoogleCOSProvisioner) readinessURL() (string, error) {
 
 func (p *GoogleCOSProvisioner) waitForCloudInit() error {
 	out, err := p.SSHCommand(cloudInitWaitCmd)
-	if err != nil {
-		if out != "" {
-			log.Debugf("cloud-init status output:\n%s", out)
-		}
-		return fmt.Errorf("waiting for cloud-init: %w", err)
-	}
-
-	if strings.Contains(out, "degraded") {
-		log.Warnf("cloud-init finished with recoverable errors:\n%s", out)
-	} else if out != "" {
+	if out != "" {
 		log.Debugf("cloud-init status output:\n%s", out)
+	}
+	if err != nil {
+		return fmt.Errorf("waiting for cloud-init: %w", err)
 	}
 
 	return nil
