@@ -58,6 +58,39 @@ echo 'GCE readiness metadata unavailable after 3 attempts' >&2
 exit 1`
 }
 
+const (
+	cloudInitResultFile  = "/run/cloud-init/result.json"
+	cloudInitWaitTimeout = 5 * time.Minute
+)
+
+// cloudInitWaitCmd polls for result.json, which cloud-final writes after every module
+// including runcmd has run, and only then asks `cloud-init status` for the errors.
+//
+// `cloud-init status --wait` is not usable on stock COS: cloud-init 24.4 reports
+// "Failed due to systemd unit failure" (exit 1) while it is still running because COS
+// pulls the cloud-init services in through cloud-init.target and leaves them
+// UnitFileState=disabled, and once done it exits 2 ("degraded done") because
+// DataSourceGCELocal fails without a DHCP client. Neither is a failed boot, so 2 is
+// treated as done after the file exists; 1 (errors in result.json) and 124 (timeout)
+// fail the create.
+func cloudInitWaitCmd(resultFile string, timeout time.Duration) string {
+	return fmt.Sprintf(`sudo sh -c '
+deadline=$(( $(date +%%s) + %d ))
+until [ -f %s ]; do
+	if [ "$(date +%%s)" -ge "$deadline" ]; then
+		echo "timed out after %s waiting for cloud-init to finish" >&2
+		cloud-init status --long
+		exit 124
+	fi
+	sleep 2
+done
+cloud-init status --long
+rc=$?
+[ "$rc" -eq 2 ] && exit 0
+exit $rc
+'`, int(timeout.Seconds()), resultFile, timeout)
+}
+
 const dockerNetworkVerifierImageCheck = `sudo docker image inspect alpine:latest >/dev/null`
 
 const dockerNetworkProbeContainer = "gitlab-docker-network-readiness-probe"
@@ -222,12 +255,18 @@ func (p *GoogleCOSProvisioner) readinessURL() (string, error) {
 }
 
 func (p *GoogleCOSProvisioner) waitForCloudInit() error {
-	out, err := p.SSHCommand("sudo timeout 5m cloud-init status --wait --long")
-	if out != "" {
-		log.Debugf("cloud-init status output:\n%s", out)
-	}
+	out, err := p.SSHCommand(cloudInitWaitCmd(cloudInitResultFile, cloudInitWaitTimeout))
 	if err != nil {
+		if out != "" {
+			log.Debugf("cloud-init status output:\n%s", out)
+		}
 		return fmt.Errorf("waiting for cloud-init readiness gate: %w", err)
+	}
+
+	if strings.Contains(out, "degraded") {
+		log.Warnf("cloud-init finished with recoverable errors:\n%s", out)
+	} else if out != "" {
+		log.Debugf("cloud-init status output:\n%s", out)
 	}
 
 	return nil

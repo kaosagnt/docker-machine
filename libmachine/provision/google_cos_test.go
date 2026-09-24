@@ -2,9 +2,12 @@ package provision
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -132,7 +135,7 @@ func TestDockerNetworkDiagnosticsShellSyntax(t *testing.T) {
 
 func TestGoogleCOSCloudInitFailure(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		"sudo timeout 5m cloud-init status --wait --long": {{
+		cloudInitWaitCmd(cloudInitResultFile, cloudInitWaitTimeout): {{
 			out: "status: error\ndetail: gpu-driver.service failed\n",
 			err: errors.New("exit status 1"),
 		}},
@@ -142,6 +145,64 @@ func TestGoogleCOSCloudInitFailure(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "waiting for cloud-init readiness gate")
+}
+
+func TestGoogleCOSCloudInitDegradedDone(t *testing.T) {
+	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
+		cloudInitWaitCmd(cloudInitResultFile, cloudInitWaitTimeout): {{
+			out: "status: done\nextended_status: degraded done\nrecoverable_errors:\nWARNING:\n\t- Getting data from DataSourceGCELocal failed\n",
+		}},
+	}}
+
+	require.NoError(t, newGoogleCOSProvisionerForTest(commander).waitForCloudInit())
+}
+
+func TestGoogleCOSCloudInitWaitShellSyntax(t *testing.T) {
+	require.NoError(t, exec.Command("sh", "-n", "-c", cloudInitWaitCmd(cloudInitResultFile, cloudInitWaitTimeout)).Run())
+}
+
+// Runs the remote shell snippet with fake sudo and cloud-init: once result.json
+// exists, cloud-init's exit 0 and 2 (degraded done) pass and 1 is returned as is;
+// without the file the snippet times out with 124 and never consults the exit code.
+func TestGoogleCOSCloudInitWaitExitCodes(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		resultFile    bool
+		cloudInitExit int
+		wantExit      int
+	}{
+		{"done", true, 0, 0},
+		{"degraded done", true, 2, 0},
+		{"error", true, 1, 1},
+		{"timeout", false, 0, 124},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFakeCommand(t, dir, "sudo", "#!/bin/sh\nexec \"$@\"\n")
+			writeFakeCommand(t, dir, "cloud-init", fmt.Sprintf("#!/bin/sh\nexit %d\n", tt.cloudInitExit))
+			resultFile := filepath.Join(dir, "result.json")
+			if tt.resultFile {
+				require.NoError(t, os.WriteFile(resultFile, []byte("{}"), 0o644))
+			}
+
+			cmd := exec.Command("sh", "-c", cloudInitWaitCmd(resultFile, 3*time.Second))
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+			err := cmd.Run()
+
+			if tt.wantExit == 0 {
+				assert.NoError(t, err)
+				return
+			}
+			var exitErr *exec.ExitError
+			require.ErrorAs(t, err, &exitErr)
+			assert.Equal(t, tt.wantExit, exitErr.ExitCode())
+		})
+	}
+}
+
+func writeFakeCommand(t *testing.T, dir, name, script string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755))
 }
 
 func TestVerifyDockerBridgeNetworkRequiresPreloadedImage(t *testing.T) {
