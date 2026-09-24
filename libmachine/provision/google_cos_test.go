@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -135,7 +134,7 @@ func TestDockerNetworkDiagnosticsShellSyntax(t *testing.T) {
 
 func TestGoogleCOSCloudInitFailure(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		cloudInitWaitCmd(cloudInitResultFile, cloudInitWaitTimeout): {{
+		cloudInitWaitCmd: {{
 			out: "status: error\ndetail: gpu-driver.service failed\n",
 			err: errors.New("exit status 1"),
 		}},
@@ -149,7 +148,7 @@ func TestGoogleCOSCloudInitFailure(t *testing.T) {
 
 func TestGoogleCOSCloudInitDegradedDone(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		cloudInitWaitCmd(cloudInitResultFile, cloudInitWaitTimeout): {{
+		cloudInitWaitCmd: {{
 			out: "status: done\nextended_status: degraded done\nrecoverable_errors:\nWARNING:\n\t- Getting data from DataSourceGCELocal failed\n",
 		}},
 	}}
@@ -158,34 +157,34 @@ func TestGoogleCOSCloudInitDegradedDone(t *testing.T) {
 }
 
 func TestGoogleCOSCloudInitWaitShellSyntax(t *testing.T) {
-	require.NoError(t, exec.Command("sh", "-n", "-c", cloudInitWaitCmd(cloudInitResultFile, cloudInitWaitTimeout)).Run())
+	require.NoError(t, exec.Command("sh", "-n", "-c", cloudInitWaitCmd).Run())
 }
 
-// Runs the remote shell snippet with fake sudo and cloud-init: once result.json
-// exists, cloud-init's exit 0 and 2 (degraded done) pass and 1 is returned as is;
-// without the file the snippet times out with 124 and never consults the exit code.
+// Runs the remote shell snippet with fake sudo, timeout, systemctl and cloud-init:
+// after the target wait, cloud-init's exit 0 and 2 (degraded done) pass and 1 is
+// returned as is; a timeout (124) or systemctl failure returns before cloud-init
+// status is consulted.
 func TestGoogleCOSCloudInitWaitExitCodes(t *testing.T) {
 	for _, tt := range []struct {
 		name          string
-		resultFile    bool
+		systemctlExit int
 		cloudInitExit int
 		wantExit      int
 	}{
-		{"done", true, 0, 0},
-		{"degraded done", true, 2, 0},
-		{"error", true, 1, 1},
-		{"timeout", false, 0, 124},
+		{"done", 0, 0, 0},
+		{"degraded done", 0, 2, 0},
+		{"error", 0, 1, 1},
+		{"timeout", 124, 0, 124},
+		{"systemctl failure", 1, 0, 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			writeFakeCommand(t, dir, "sudo", "#!/bin/sh\nexec \"$@\"\n")
+			writeFakeCommand(t, dir, "timeout", "#!/bin/sh\nshift\nexec \"$@\"\n")
+			writeFakeCommand(t, dir, "systemctl", fmt.Sprintf("#!/bin/sh\n[ \"$1 $2\" = 'start cloud-init.target' ] || exit 99\nexit %d\n", tt.systemctlExit))
 			writeFakeCommand(t, dir, "cloud-init", fmt.Sprintf("#!/bin/sh\nexit %d\n", tt.cloudInitExit))
-			resultFile := filepath.Join(dir, "result.json")
-			if tt.resultFile {
-				require.NoError(t, os.WriteFile(resultFile, []byte("{}"), 0o644))
-			}
 
-			cmd := exec.Command("sh", "-c", cloudInitWaitCmd(resultFile, 3*time.Second))
+			cmd := exec.Command("sh", "-c", cloudInitWaitCmd)
 			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
 			err := cmd.Run()
 
