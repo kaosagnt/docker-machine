@@ -13,11 +13,11 @@ import (
 // NewTLSBootstrap generates the machine's server certificate and the
 // systemd drop-in that starts dockerd with it, for a driver to deliver at
 // create time. The machine has no address yet, so the certificate is only
-// valid for the machine name; clients have to verify against it
+// valid for the machine name and clients have to verify against that
 // (auth.Options.ServerName).
 //
-// The drop-in is the Google COS one: that is the only provisioner whose
-// image already has dockerd installed and needs nothing else from us.
+// The drop-in is the Google COS one. COS is the only image with dockerd
+// preinstalled, which is what makes provisioning without SSH possible.
 func NewTLSBootstrap(d drivers.Driver, authOptions auth.Options, engineOptions engine.Options, swarmOptions swarm.Options) (drivers.TLSBootstrap, error) {
 	var b drivers.TLSBootstrap
 

@@ -18,16 +18,14 @@ import (
 const (
 	tlsWaitTimeout  = 5 * time.Minute
 	tlsWaitInterval = time.Second
-	// tlsDialTimeout is short because a booting machine drops the SYN
-	// until its firewall opens the port, and a long dial would hide when
-	// the port does open.
+	// A booting COS machine drops packets to the port until its firewall
+	// rule is in, so a dial can only time out. Keep that short.
 	tlsDialTimeout = 2 * time.Second
 )
 
-// prepareTLSBootstrap asks the driver whether it delivers the TLS material
-// at create time and, if so, generates it and hands it over. Returns whether
-// the machine is bootstrapped that way, so the caller knows to skip the SSH
-// provisioner.
+// prepareTLSBootstrap generates the TLS material and hands it to the driver
+// when the driver delivers it at create time. Returns whether it did, in
+// which case the SSH provisioner is not needed.
 func prepareTLSBootstrap(h *host.Host) (bool, error) {
 	bootstrapper, ok := h.Driver.(drivers.TLSBootstrapper)
 	if !ok {
@@ -50,8 +48,8 @@ func prepareTLSBootstrap(h *host.Host) (bool, error) {
 }
 
 // waitForTLS retries a TLS handshake against the machine's Docker port
-// until the server certificate verifies, the timeout passes, or the server
-// presents a certificate that fails verification (which no retry fixes).
+// until it succeeds or the timeout passes. A certificate that fails
+// verification ends the wait at once.
 func waitForTLS(h *host.Host, timeout time.Duration) error {
 	dockerURL, err := h.Driver.GetURL()
 	if err != nil {
