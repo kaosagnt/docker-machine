@@ -56,6 +56,7 @@ type Driver struct {
 	UseInternalIP                bool
 	UseInternalIPOnly            bool
 	ServiceAccount               string
+	NoServiceAccount             bool
 	Scopes                       string
 	DiskSize                     int
 	ProvisionedIops              int
@@ -182,6 +183,11 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "GCE Service Account for the VM (email address)",
 			Value:  defaultServiceAccount,
 			EnvVar: "GOOGLE_SERVICE_ACCOUNT",
+		},
+		mcnflag.BoolFlag{
+			Name:   "google-no-service-account",
+			Usage:  "Attach no service account to the VM, so the metadata server serves no access token. Overrides --google-service-account and --google-scopes.",
+			EnvVar: "GOOGLE_NO_SERVICE_ACCOUNT",
 		},
 		mcnflag.StringFlag{
 			Name:   "google-scopes",
@@ -434,7 +440,11 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		d.UseInternalIP = flags.Bool("google-use-internal-ip") || flags.Bool("google-use-internal-ip-only")
 		d.UseInternalIPOnly = flags.Bool("google-use-internal-ip-only")
 		d.ServiceAccount = flags.String("google-service-account")
+		d.NoServiceAccount = flags.Bool("google-no-service-account")
 		d.Scopes = flags.String("google-scopes")
+		if d.NoServiceAccount && (d.ServiceAccount != defaultServiceAccount || d.Scopes != defaultScopes) {
+			log.Warn("--google-no-service-account is set, ignoring --google-service-account and --google-scopes")
+		}
 		d.Tags = flags.String("google-tags")
 		d.OpenPorts = flags.StringSlice("google-open-port")
 		d.Labels = flags.StringSlice("google-label")
