@@ -2,8 +2,10 @@ package provision
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,34 +40,34 @@ func newGoogleCOSProvisionerForTest(commander SSHCommander) *GoogleCOSProvisione
 	return p
 }
 
-func TestGoogleCOSReadinessEnabled(t *testing.T) {
+func TestGoogleCOSWaitForCloudInitEnabled(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		metadataAttributeCheck(readinessGateMetadataKey): {{out: "true\n"}},
+		metadataAttributeCheck(waitForCloudInitMetadataKey): {{out: "true\n"}},
 	}}
 
-	enabled, err := newGoogleCOSProvisionerForTest(commander).readinessEnabled()
+	enabled, err := newGoogleCOSProvisionerForTest(commander).waitForCloudInitEnabled()
 
 	require.NoError(t, err)
 	assert.True(t, enabled)
 }
 
-func TestGoogleCOSReadinessDisabled(t *testing.T) {
+func TestGoogleCOSWaitForCloudInitDisabled(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		metadataAttributeCheck(readinessGateMetadataKey): {{out: ""}},
+		metadataAttributeCheck(waitForCloudInitMetadataKey): {{out: ""}},
 	}}
 
-	enabled, err := newGoogleCOSProvisionerForTest(commander).readinessEnabled()
+	enabled, err := newGoogleCOSProvisionerForTest(commander).waitForCloudInitEnabled()
 
 	require.NoError(t, err)
 	assert.False(t, enabled)
 }
 
-func TestGoogleCOSReadinessMetadataFailure(t *testing.T) {
+func TestGoogleCOSWaitForCloudInitMetadataFailure(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		metadataAttributeCheck(readinessGateMetadataKey): {{err: errors.New("metadata unavailable")}},
+		metadataAttributeCheck(waitForCloudInitMetadataKey): {{err: errors.New("metadata unavailable")}},
 	}}
 
-	enabled, err := newGoogleCOSProvisionerForTest(commander).readinessEnabled()
+	enabled, err := newGoogleCOSProvisionerForTest(commander).waitForCloudInitEnabled()
 
 	require.Error(t, err)
 	assert.False(t, enabled)
@@ -123,7 +125,7 @@ func TestShellQuoteSurvivesTwoShellLayers(t *testing.T) {
 }
 
 func TestReadinessMetadataCheckShellSyntax(t *testing.T) {
-	require.NoError(t, exec.Command("sh", "-n", "-c", metadataAttributeCheck(readinessGateMetadataKey)).Run())
+	require.NoError(t, exec.Command("sh", "-n", "-c", metadataAttributeCheck(waitForCloudInitMetadataKey)).Run())
 }
 
 func TestDockerNetworkDiagnosticsShellSyntax(t *testing.T) {
@@ -132,7 +134,7 @@ func TestDockerNetworkDiagnosticsShellSyntax(t *testing.T) {
 
 func TestGoogleCOSCloudInitFailure(t *testing.T) {
 	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
-		"sudo timeout 5m cloud-init status --wait --long": {{
+		cloudInitWaitCmd: {{
 			out: "status: error\ndetail: gpu-driver.service failed\n",
 			err: errors.New("exit status 1"),
 		}},
@@ -141,7 +143,61 @@ func TestGoogleCOSCloudInitFailure(t *testing.T) {
 	err := newGoogleCOSProvisionerForTest(commander).waitForCloudInit()
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "waiting for cloud-init readiness gate")
+	assert.Contains(t, err.Error(), "waiting for cloud-init")
+}
+
+func TestGoogleCOSCloudInitDegradedDone(t *testing.T) {
+	commander := &scriptedSSHCommander{responses: map[string][]scriptedSSHResponse{
+		cloudInitWaitCmd: {{
+			out: "status: done\nextended_status: degraded done\nrecoverable_errors:\nWARNING:\n\t- Getting data from DataSourceGCELocal failed\n",
+		}},
+	}}
+
+	require.NoError(t, newGoogleCOSProvisionerForTest(commander).waitForCloudInit())
+}
+
+func TestGoogleCOSCloudInitWaitShellSyntax(t *testing.T) {
+	require.NoError(t, exec.Command("sh", "-n", "-c", cloudInitWaitCmd).Run())
+}
+
+func TestGoogleCOSCloudInitWaitExitCodes(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		systemctlExit int
+		cloudInitExit int
+		wantExit      int
+	}{
+		{"done", 0, 0, 0},
+		{"degraded done", 0, 2, 0},
+		{"error", 0, 1, 1},
+		{"timeout", 124, 0, 124},
+		{"systemctl failure", 1, 0, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFakeCommand(t, dir, "sudo", "#!/bin/sh\nexec \"$@\"\n")
+			writeFakeCommand(t, dir, "timeout", "#!/bin/sh\nshift\nexec \"$@\"\n")
+			writeFakeCommand(t, dir, "systemctl", fmt.Sprintf("#!/bin/sh\n[ \"$1 $2\" = 'start cloud-init.target' ] || exit 99\nexit %d\n", tt.systemctlExit))
+			writeFakeCommand(t, dir, "cloud-init", fmt.Sprintf("#!/bin/sh\nexit %d\n", tt.cloudInitExit))
+
+			cmd := exec.Command("sh", "-c", cloudInitWaitCmd)
+			cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+			err := cmd.Run()
+
+			if tt.wantExit == 0 {
+				assert.NoError(t, err)
+				return
+			}
+			var exitErr *exec.ExitError
+			require.ErrorAs(t, err, &exitErr)
+			assert.Equal(t, tt.wantExit, exitErr.ExitCode())
+		})
+	}
+}
+
+func writeFakeCommand(t *testing.T, dir, name, script string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755))
 }
 
 func TestVerifyDockerBridgeNetworkRequiresPreloadedImage(t *testing.T) {
