@@ -361,3 +361,76 @@ func TestMetadataMapFromStringSlice(t *testing.T) {
 		})
 	}
 }
+
+func TestSetConfigFromFlags_COSTLSViaMetadata(t *testing.T) {
+	newFlags := func(driver *Driver, values map[string]interface{}) *drivers.CheckDriverOptions {
+		values["google-project"] = "PROJECT"
+		return &drivers.CheckDriverOptions{FlagsValues: values, CreateFlags: driver.GetCreateFlags()}
+	}
+
+	t.Run("off by default", func(t *testing.T) {
+		driver := NewDriver("", "")
+		require.NoError(t, driver.SetConfigFromFlags(newFlags(driver, map[string]interface{}{})))
+		assert.False(t, driver.COSTLSViaMetadata)
+		requested, err := driver.TLSBootstrapRequested()
+		require.NoError(t, err)
+		assert.False(t, requested)
+	})
+
+	t.Run("flag is stored and reported", func(t *testing.T) {
+		driver := NewDriver("", "")
+		require.NoError(t, driver.SetConfigFromFlags(newFlags(driver, map[string]interface{}{
+			"google-cos-tls-via-metadata": true,
+		})))
+		assert.True(t, driver.COSTLSViaMetadata)
+		requested, err := driver.TLSBootstrapRequested()
+		require.NoError(t, err)
+		assert.True(t, requested)
+	})
+
+	t.Run("rejects use-existing", func(t *testing.T) {
+		driver := NewDriver("", "")
+		err := driver.SetConfigFromFlags(newFlags(driver, map[string]interface{}{
+			"google-cos-tls-via-metadata": true,
+			"google-use-existing":         true,
+		}))
+		require.ErrorContains(t, err, "mutually exclusive")
+	})
+}
+
+func TestSetTLSBootstrap(t *testing.T) {
+	complete := drivers.TLSBootstrap{
+		CACert:       []byte("ca"),
+		ServerCert:   []byte("cert"),
+		ServerKey:    []byte("key"),
+		DaemonDropin: []byte("dropin"),
+	}
+
+	t.Run("requires the flag", func(t *testing.T) {
+		driver := NewDriver("m", t.TempDir())
+		require.ErrorContains(t, driver.SetTLSBootstrap(complete), "--google-cos-tls-via-metadata")
+		assert.Nil(t, driver.tlsBootstrap)
+	})
+
+	t.Run("rejects incomplete material", func(t *testing.T) {
+		driver := NewDriver("m", t.TempDir())
+		driver.COSTLSViaMetadata = true
+		incomplete := complete
+		incomplete.ServerKey = nil
+		require.ErrorContains(t, driver.SetTLSBootstrap(incomplete), "incomplete")
+		assert.Nil(t, driver.tlsBootstrap)
+	})
+
+	t.Run("stores the material", func(t *testing.T) {
+		driver := NewDriver("m", t.TempDir())
+		driver.COSTLSViaMetadata = true
+		require.NoError(t, driver.SetTLSBootstrap(complete))
+		assert.Equal(t, &complete, driver.tlsBootstrap)
+	})
+
+	t.Run("create refuses to run without it", func(t *testing.T) {
+		driver := NewDriver("m", t.TempDir())
+		driver.COSTLSViaMetadata = true
+		require.ErrorContains(t, driver.Create(), "no TLS bootstrap")
+	})
+}

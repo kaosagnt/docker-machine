@@ -561,7 +561,7 @@ func (c *ComputeUtil) appendSSHKeyMetadata(metadata *raw.Metadata, sshKeyPath st
 }
 
 // prepareMetadata builds the metadata for a new instance: the configured
-// entries and the SSH key.
+// entries, the SSH key, and the TLS bootstrap when the driver has one.
 func (c *ComputeUtil) prepareMetadata(d *Driver) (*raw.Metadata, error) {
 	metadata := &raw.Metadata{
 		Items: make([]*raw.MetadataItems, 0),
@@ -582,6 +582,13 @@ func (c *ComputeUtil) prepareMetadata(d *Driver) (*raw.Metadata, error) {
 
 	if err := c.appendSSHKeyMetadata(metadata, d.GetSSHKeyPath()); err != nil {
 		return nil, err
+	}
+
+	if d.tlsBootstrap != nil {
+		appendMetadata(metadata, tlsCACertMetadataKey, string(d.tlsBootstrap.CACert))
+		appendMetadata(metadata, tlsServerCertMetadataKey, string(d.tlsBootstrap.ServerCert))
+		appendMetadata(metadata, tlsServerKeyMetadataKey, string(d.tlsBootstrap.ServerKey))
+		appendMetadata(metadata, dockerDaemonDropinMetadataKey, string(d.tlsBootstrap.DaemonDropin))
 	}
 
 	return metadata, nil

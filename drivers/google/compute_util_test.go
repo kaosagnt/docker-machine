@@ -347,12 +347,33 @@ func TestPrepareMetadata(t *testing.T) {
 		assertMetadata(t, m, "sshKeys", sshKeyValue)
 	}
 
+	tlsBootstrap := &drivers.TLSBootstrap{
+		CACert:       []byte("ca"),
+		ServerCert:   []byte("cert"),
+		ServerKey:    []byte("key"),
+		DaemonDropin: []byte("[Service]\nExecStart=dockerd"),
+	}
+
 	tests := map[string]struct {
 		metadata       metadataMap
 		metadataFiles  func(t *testing.T) (metadataMap, func())
+		tlsBootstrap   *drivers.TLSBootstrap
 		expectedError  bool
 		assertMetadata func(t *testing.T, m *raw.Metadata)
 	}{
+		"tls bootstrap attached": {
+			metadata:      metadata,
+			metadataFiles: noMetadataFile,
+			tlsBootstrap:  tlsBootstrap,
+			assertMetadata: func(t *testing.T, m *raw.Metadata) {
+				assertMetadata(t, m, metadataKey1, metadataValue1)
+				assertMetadata(t, m, "ssh-keys", sshKeyValue)
+				assertMetadata(t, m, tlsCACertMetadataKey, "ca")
+				assertMetadata(t, m, tlsServerCertMetadataKey, "cert")
+				assertMetadata(t, m, tlsServerKeyMetadataKey, "key")
+				assertMetadata(t, m, dockerDaemonDropinMetadataKey, "[Service]\nExecStart=dockerd")
+			},
+		},
 		"error on metadata file reading": {
 			metadataFiles:  failingMetadataFile,
 			expectedError:  true,
@@ -413,6 +434,7 @@ func TestPrepareMetadata(t *testing.T) {
 			d := withSSHKey(t, &Driver{
 				Metadata:         tt.metadata,
 				MetadataFromFile: metadataFiles,
+				tlsBootstrap:     tt.tlsBootstrap,
 			})
 
 			c := &ComputeUtil{userName: "cos"}
