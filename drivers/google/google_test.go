@@ -112,33 +112,41 @@ func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 	}
 }
 
-func TestSetConfigFromFlags_COSDockerNetworkReadinessGate(t *testing.T) {
+func TestSetConfigFromFlags_COSWaitForCloudInit(t *testing.T) {
 	tests := map[string]struct {
-		enabled          bool
+		flag             string
+		expectedEnabled  bool
 		expectedMetadata metadataMap
 	}{
 		"disabled by default": {
 			expectedMetadata: metadataMap{},
 		},
 		"enabled injects metadata": {
-			enabled:          true,
-			expectedMetadata: metadataMap{cosDockerNetworkReadinessMetadataKey: "true"},
+			flag:             "google-cos-wait-for-cloud-init",
+			expectedEnabled:  true,
+			expectedMetadata: metadataMap{cosWaitForCloudInitMetadataKey: "true"},
+		},
+		"deprecated flag still enables": {
+			flag:             "google-cos-docker-network-readiness-gate",
+			expectedEnabled:  true,
+			expectedMetadata: metadataMap{cosWaitForCloudInitMetadataKey: "true"},
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			driver := NewDriver("", "")
+			flagsValues := map[string]interface{}{"google-project": "PROJECT"}
+			if tt.flag != "" {
+				flagsValues[tt.flag] = true
+			}
 			flags := &drivers.CheckDriverOptions{
-				FlagsValues: map[string]interface{}{
-					"google-project": "PROJECT",
-					"google-cos-docker-network-readiness-gate": tt.enabled,
-				},
+				FlagsValues: flagsValues,
 				CreateFlags: driver.GetCreateFlags(),
 			}
 
 			require.NoError(t, driver.SetConfigFromFlags(flags))
-			assert.Equal(t, tt.enabled, driver.COSDockerNetworkReadinessGate)
+			assert.Equal(t, tt.expectedEnabled, driver.COSWaitForCloudInit)
 			assert.Equal(t, tt.expectedMetadata, driver.Metadata)
 		})
 	}
