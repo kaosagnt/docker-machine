@@ -434,3 +434,19 @@ func TestSetTLSBootstrap(t *testing.T) {
 		require.ErrorContains(t, driver.Create(), "no TLS bootstrap")
 	})
 }
+
+func TestRecreateFromDiskSupported(t *testing.T) {
+	t.Run("direct mode", func(t *testing.T) {
+		require.NoError(t, NewDriver("m", t.TempDir()).recreateFromDiskSupported())
+	})
+	t.Run("bulk insert", func(t *testing.T) {
+		d := NewDriver("m", t.TempDir())
+		d.BulkInsert = true
+		require.ErrorContains(t, d.recreateFromDiskSupported(), "--google-bulk-insert")
+	})
+	t.Run("tls via metadata", func(t *testing.T) {
+		d := NewDriver("m", t.TempDir())
+		d.COSTLSViaMetadata = true
+		require.ErrorContains(t, d.recreateFromDiskSupported(), "--google-cos-tls-via-metadata")
+	})
+}

@@ -797,10 +797,8 @@ func (d *Driver) Start() error {
 	}
 
 	if instance == nil {
-		// bulkInsert can't reuse the existing disk: a fresh BulkInsert
-		// picks a new zone and builds a new disk, orphaning the old one.
-		if d.BulkInsert {
-			return fmt.Errorf("instance %q not found and --google-bulk-insert mode does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
+		if err := d.recreateFromDiskSupported(); err != nil {
+			return err
 		}
 		if err = c.createInstance(d); err != nil {
 			return err
@@ -813,6 +811,23 @@ func (d *Driver) Start() error {
 
 	d.IPAddress, err = d.GetIP()
 	return err
+}
+
+// recreateFromDiskSupported reports whether Start may insert a new instance
+// on the existing disk when the instance record is gone.
+func (d *Driver) recreateFromDiskSupported() error {
+	// bulkInsert can't reuse the existing disk: a fresh BulkInsert
+	// picks a new zone and builds a new disk, orphaning the old one.
+	if d.BulkInsert {
+		return fmt.Errorf("instance %q not found and --google-bulk-insert mode does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
+	}
+	// The TLS material is only attached to the original insert, and COS
+	// keeps /etc on a tmpfs overlay, so a new instance on the old disk
+	// would boot without it.
+	if d.COSTLSViaMetadata {
+		return fmt.Errorf("instance %q not found and --google-cos-tls-via-metadata does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
+	}
+	return nil
 }
 
 // Stop stops an existing GCE instance.
