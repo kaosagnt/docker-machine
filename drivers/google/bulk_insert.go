@@ -371,12 +371,7 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver, sel flexSelec
 		Tags: &raw.Tags{
 			Items: parseTags(d),
 		},
-		ServiceAccounts: []*raw.ServiceAccount{
-			{
-				Email:  d.ServiceAccount,
-				Scopes: strings.Split(d.Scopes, ","),
-			},
-		},
+		ServiceAccounts: serviceAccounts(d),
 		Scheduling: &raw.Scheduling{
 			Preemptible: c.preemptible,
 		},

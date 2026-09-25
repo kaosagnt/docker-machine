@@ -44,6 +44,7 @@ To create a machine instance, specify `--driver google`, the project id and the 
     -   `--google-machine-image`: The absolute URL to a base VM image to instantiate.
     -   `--google-username`: The username to use for the instance.
     -   `--google-scopes`: The scopes for OAuth 2.0 to Access Google APIs. See [Google Compute Engine Doc](https://cloud.google.com/storage/docs/authentication).
+    -   `--google-no-service-account`: Attach no service account to the VM. The metadata server then has no access token, and `--google-service-account` and `--google-scopes` are ignored.
     -   `--google-disk-size`: The disk size of instance.
     -   `--google-disk-type`: The disk type of instance.
     -   `--google-address`: Instance's static external IP (name or IP).
@@ -68,6 +69,7 @@ Environment variables and default values:
 | `--google-machine-image`   | `GOOGLE_MACHINE_IMAGE`   | `ubuntu-2204-jammy-v20250815`        |
 | `--google-username`        | `GOOGLE_USERNAME`        | `docker-user`                        |
 | `--google-scopes`          | `GOOGLE_SCOPES`          | `devstorage.read_only,logging.write` |
+| `--google-no-service-account` | `GOOGLE_NO_SERVICE_ACCOUNT` | -                                 |
 | `--google-disk-size`       | `GOOGLE_DISK_SIZE`       | `10`                                 |
 | `--google-disk-type`       | `GOOGLE_DISK_TYPE`       | `pd-standard`                        |
 | `--google-address`         | `GOOGLE_ADDRESS`         | -                                    |

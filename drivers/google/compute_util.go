@@ -410,12 +410,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 		Tags: &raw.Tags{
 			Items: parseTags(d),
 		},
-		ServiceAccounts: []*raw.ServiceAccount{
-			{
-				Email:  d.ServiceAccount,
-				Scopes: strings.Split(d.Scopes, ","),
-			},
-		},
+		ServiceAccounts: serviceAccounts(d),
 		Scheduling: &raw.Scheduling{
 			Preemptible: c.preemptible,
 		},
@@ -623,6 +618,21 @@ func appendMetadata(metadata *raw.Metadata, key string, value string) {
 	}
 
 	metadata.Items = append(metadata.Items, item)
+}
+
+// serviceAccounts returns the instance service account, or nil with
+// --google-no-service-account.
+func serviceAccounts(d *Driver) []*raw.ServiceAccount {
+	if d.NoServiceAccount {
+		return nil
+	}
+
+	return []*raw.ServiceAccount{
+		{
+			Email:  d.ServiceAccount,
+			Scopes: strings.Split(d.Scopes, ","),
+		},
+	}
 }
 
 // parseTags computes the tags for the instance.
