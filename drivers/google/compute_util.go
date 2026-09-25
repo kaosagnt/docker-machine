@@ -384,7 +384,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 		net = c.globalURL + "/networks/" + d.Network
 	}
 
-	metadata, err := prepareMetadata(d)
+	metadata, err := c.prepareMetadata(d)
 	if err != nil {
 		return err
 	}
@@ -487,16 +487,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 	}
 
 	log.Infof("Waiting for Instance")
-	if err = c.waitForRegionalOp(op.Name); err != nil {
-		return err
-	}
-
-	instance, err = c.instance()
-	if err != nil {
-		return err
-	}
-
-	return c.uploadSSHKey(instance, d.GetSSHKeyPath())
+	return c.waitForRegionalOp(op.Name)
 }
 
 // configureInstance configures an existing instance for use with Docker Machine.
@@ -536,31 +527,15 @@ func (c *ComputeUtil) addFirewallTag(instance *raw.Instance) error {
 	return c.waitForRegionalOp(op.Name)
 }
 
-// uploadSSHKey updates the instance metadata with the given ssh key.
+// uploadSSHKey updates the metadata of an existing instance with the given
+// ssh key. New instances get the key at insert time (see prepareMetadata).
 func (c *ComputeUtil) uploadSSHKey(instance *raw.Instance, sshKeyPath string) error {
 	log.Infof("Uploading SSH Key")
 
-	sshKey, err := ioutil.ReadFile(sshKeyPath + ".pub")
-	if err != nil {
+	metadata := instance.Metadata
+	if err := c.appendSSHKeyMetadata(metadata, sshKeyPath); err != nil {
 		return err
 	}
-
-	metaDataValue := fmt.Sprintf("%s:%s %s\n", c.userName, strings.TrimSpace(string(sshKey)), c.userName)
-
-	metadata := instance.Metadata
-	// "sshKeys" was deprecated in favor of "ssh-keys" metadata key. However, old images may still depend
-	// on the old metadata configuration. And users may still have legitimate reasons to use these older
-	// images. As instance metadata is a simple key-value store, it should have no problems with having
-	// the keys defined twice under two different names. Legacy images will then still be able to use the
-	// legacy key naming, while new ones will get support for the expected new naming.
-	metadata.Items = append(metadata.Items, &raw.MetadataItems{
-		Key:   "sshKeys",
-		Value: &metaDataValue,
-	})
-	metadata.Items = append(metadata.Items, &raw.MetadataItems{
-		Key:   "ssh-keys",
-		Value: &metaDataValue,
-	})
 
 	op, err := c.service.Instances.SetMetadata(c.project, c.zone, c.instanceName, metadata).Do()
 	if err != nil {
@@ -570,8 +545,24 @@ func (c *ComputeUtil) uploadSSHKey(instance *raw.Instance, sshKeyPath string) er
 	return c.waitForRegionalOp(op.Name)
 }
 
-// prepareMetadata prepares instance metadata entries from provided configuration
-func prepareMetadata(d *Driver) (*raw.Metadata, error) {
+// appendSSHKeyMetadata adds the public key for the SSH user under both the
+// current and the deprecated metadata key, so that old images keep working.
+func (c *ComputeUtil) appendSSHKeyMetadata(metadata *raw.Metadata, sshKeyPath string) error {
+	sshKey, err := ioutil.ReadFile(sshKeyPath + ".pub")
+	if err != nil {
+		return err
+	}
+
+	metaDataValue := fmt.Sprintf("%s:%s %s\n", c.userName, strings.TrimSpace(string(sshKey)), c.userName)
+	appendMetadata(metadata, "sshKeys", metaDataValue)
+	appendMetadata(metadata, "ssh-keys", metaDataValue)
+
+	return nil
+}
+
+// prepareMetadata builds the metadata for a new instance: the configured
+// entries and the SSH key.
+func (c *ComputeUtil) prepareMetadata(d *Driver) (*raw.Metadata, error) {
 	metadata := &raw.Metadata{
 		Items: make([]*raw.MetadataItems, 0),
 	}
@@ -587,6 +578,10 @@ func prepareMetadata(d *Driver) (*raw.Metadata, error) {
 		}
 
 		appendMetadata(metadata, key, value)
+	}
+
+	if err := c.appendSSHKeyMetadata(metadata, d.GetSSHKeyPath()); err != nil {
+		return nil, err
 	}
 
 	return metadata, nil
