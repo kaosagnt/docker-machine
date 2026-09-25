@@ -149,6 +149,11 @@ func (api *Client) Create(h *host.Host) error {
 }
 
 func (api *Client) performCreate(h *host.Host) error {
+	tlsBootstrap, err := prepareTLSBootstrap(h)
+	if err != nil {
+		return fmt.Errorf("Error preparing the TLS bootstrap: %s", err)
+	}
+
 	if err := h.Driver.Create(); err != nil {
 		return fmt.Errorf("Error in driver during machine creation: %s", err)
 	}
@@ -167,15 +172,22 @@ func (api *Client) performCreate(h *host.Host) error {
 		return fmt.Errorf("Error waiting for machine to be running: %s", err)
 	}
 
-	log.Info("Detecting operating system of created instance...")
-	provisioner, err := provision.DetectProvisioner(h.Driver)
-	if err != nil {
-		return fmt.Errorf("Error detecting OS: %s", err)
-	}
+	if tlsBootstrap {
+		log.WithField("phase", "wait_tls").Info("Waiting for Docker to accept TLS connections...")
+		if err := waitForTLS(h, tlsWaitTimeout); err != nil {
+			return fmt.Errorf("Error waiting for Docker TLS: %s", err)
+		}
+	} else {
+		log.Info("Detecting operating system of created instance...")
+		provisioner, err := provision.DetectProvisioner(h.Driver)
+		if err != nil {
+			return fmt.Errorf("Error detecting OS: %s", err)
+		}
 
-	log.WithFields(log.Fields{"phase": "provision", "provisioner": provisioner.String()}).Info("Provisioning...")
-	if err := provisioner.Provision(*h.HostOptions.SwarmOptions, *h.HostOptions.AuthOptions, *h.HostOptions.EngineOptions); err != nil {
-		return fmt.Errorf("Error running provisioning: %s", err)
+		log.WithFields(log.Fields{"phase": "provision", "provisioner": provisioner.String()}).Info("Provisioning...")
+		if err := provisioner.Provision(*h.HostOptions.SwarmOptions, *h.HostOptions.AuthOptions, *h.HostOptions.EngineOptions); err != nil {
+			return fmt.Errorf("Error running provisioning: %s", err)
+		}
 	}
 
 	// We should check the connection to docker here

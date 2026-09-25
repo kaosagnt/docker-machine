@@ -60,31 +60,33 @@ const (
 	RPCServiceNameV0 = `RpcServerDriver`
 	RPCServiceNameV1 = `RPCServerDriver`
 
-	HeartbeatMethod          = `.Heartbeat`
-	GetVersionMethod         = `.GetVersion`
-	CloseMethod              = `.Close`
-	GetCreateFlagsMethod     = `.GetCreateFlags`
-	SetConfigRawMethod       = `.SetConfigRaw`
-	GetConfigRawMethod       = `.GetConfigRaw`
-	DriverNameMethod         = `.DriverName`
-	SetConfigFromFlagsMethod = `.SetConfigFromFlags`
-	GetURLMethod             = `.GetURL`
-	GetMachineNameMethod     = `.GetMachineName`
-	GetIPMethod              = `.GetIP`
-	GetSSHHostnameMethod     = `.GetSSHHostname`
-	GetSSHKeyPathMethod      = `.GetSSHKeyPath`
-	GetSSHPortMethod         = `.GetSSHPort`
-	GetSSHUsernameMethod     = `.GetSSHUsername`
-	GetStateMethod           = `.GetState`
-	PreCreateCheckMethod     = `.PreCreateCheck`
-	CreateMethod             = `.Create`
-	RemoveMethod             = `.Remove`
-	StartMethod              = `.Start`
-	StopMethod               = `.Stop`
-	RestartMethod            = `.Restart`
-	KillMethod               = `.Kill`
-	UpgradeMethod            = `.Upgrade`
-	UpdateLabelsMethod       = `.UpdateLabels`
+	HeartbeatMethod             = `.Heartbeat`
+	GetVersionMethod            = `.GetVersion`
+	CloseMethod                 = `.Close`
+	GetCreateFlagsMethod        = `.GetCreateFlags`
+	SetConfigRawMethod          = `.SetConfigRaw`
+	GetConfigRawMethod          = `.GetConfigRaw`
+	DriverNameMethod            = `.DriverName`
+	SetConfigFromFlagsMethod    = `.SetConfigFromFlags`
+	GetURLMethod                = `.GetURL`
+	GetMachineNameMethod        = `.GetMachineName`
+	GetIPMethod                 = `.GetIP`
+	GetSSHHostnameMethod        = `.GetSSHHostname`
+	GetSSHKeyPathMethod         = `.GetSSHKeyPath`
+	GetSSHPortMethod            = `.GetSSHPort`
+	GetSSHUsernameMethod        = `.GetSSHUsername`
+	GetStateMethod              = `.GetState`
+	PreCreateCheckMethod        = `.PreCreateCheck`
+	CreateMethod                = `.Create`
+	RemoveMethod                = `.Remove`
+	StartMethod                 = `.Start`
+	StopMethod                  = `.Stop`
+	RestartMethod               = `.Restart`
+	KillMethod                  = `.Kill`
+	UpgradeMethod               = `.Upgrade`
+	UpdateLabelsMethod          = `.UpdateLabels`
+	TLSBootstrapRequestedMethod = `.TLSBootstrapRequested`
+	SetTLSBootstrapMethod       = `.SetTLSBootstrap`
 )
 
 func (ic *InternalClient) Call(serviceMethod string, args interface{}, reply interface{}) error {
@@ -373,6 +375,23 @@ func (c *RPCClientDriver) UpdateLabels(labels map[string]string) error {
 	// plugins predating this method pass the version handshake
 	if err != nil && strings.Contains(err.Error(), "can't find method") {
 		return drivers.ErrLabelsNotSupported
+	}
+	return err
+}
+
+func (c *RPCClientDriver) TLSBootstrapRequested() (bool, error) {
+	var requested bool
+	err := c.Client.Call(TLSBootstrapRequestedMethod, struct{}{}, &requested)
+	if err != nil && strings.Contains(err.Error(), "can't find method") {
+		return false, nil
+	}
+	return requested, err
+}
+
+func (c *RPCClientDriver) SetTLSBootstrap(b drivers.TLSBootstrap) error {
+	err := c.Client.Call(SetTLSBootstrapMethod, b, nil)
+	if err != nil && strings.Contains(err.Error(), "can't find method") {
+		return drivers.ErrTLSBootstrapNotSupported
 	}
 	return err
 }

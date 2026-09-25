@@ -100,3 +100,42 @@ func TestServerDriverUpdateLabelsUnsupported(t *testing.T) {
 	err := server.UpdateLabels(map[string]string{"a": "b"}, nil)
 	assert.Equal(t, drivers.ErrLabelsNotSupported, err)
 }
+
+type tlsBootstrapDriver struct {
+	*fakedriver.Driver
+	requested bool
+	bootstrap *drivers.TLSBootstrap
+}
+
+func (d *tlsBootstrapDriver) TLSBootstrapRequested() (bool, error) {
+	return d.requested, nil
+}
+
+func (d *tlsBootstrapDriver) SetTLSBootstrap(b drivers.TLSBootstrap) error {
+	d.bootstrap = &b
+	return nil
+}
+
+func TestServerDriverTLSBootstrap(t *testing.T) {
+	driver := &tlsBootstrapDriver{Driver: &fakedriver.Driver{}, requested: true}
+	server := NewRPCServerDriver(driver)
+
+	var requested bool
+	assert.NoError(t, server.TLSBootstrapRequested(nil, &requested))
+	assert.True(t, requested)
+
+	b := drivers.TLSBootstrap{CACert: []byte("ca"), ServerCert: []byte("cert"), ServerKey: []byte("key"), DaemonDropin: []byte("dropin")}
+	assert.NoError(t, server.SetTLSBootstrap(b, nil))
+	assert.Equal(t, &b, driver.bootstrap)
+}
+
+func TestServerDriverTLSBootstrapUnsupported(t *testing.T) {
+	server := NewRPCServerDriver(&fakedriver.Driver{})
+
+	requested := true
+	assert.NoError(t, server.TLSBootstrapRequested(nil, &requested))
+	assert.False(t, requested)
+
+	err := server.SetTLSBootstrap(drivers.TLSBootstrap{}, nil)
+	assert.Equal(t, drivers.ErrTLSBootstrapNotSupported, err)
+}
