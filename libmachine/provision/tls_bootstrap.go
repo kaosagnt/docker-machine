@@ -10,14 +10,14 @@ import (
 	"github.com/docker/machine/libmachine/swarm"
 )
 
-// NewTLSBootstrap generates the server certificate and the dockerd drop-in
-// for a driver to deliver at create time. The machine has no address yet,
-// so the certificate is issued for the machine name and clients verify
-// against that (auth.Options.ServerName).
+// NewGoogleCOSTLSBootstrap generates the server certificate and the Google
+// COS dockerd drop-in for a driver to deliver at create time. The machine
+// has no address yet, so the certificate is issued for the machine name and
+// clients verify against that (auth.Options.ServerName).
 //
-// The drop-in is the Google COS one. COS ships dockerd, so it is the only
-// image that can be provisioned without SSH.
-func NewTLSBootstrap(d drivers.Driver, authOptions auth.Options, engineOptions engine.Options, swarmOptions swarm.Options) (drivers.TLSBootstrap, error) {
+// COS ships dockerd, so it is the only image that can be provisioned
+// without SSH. A driver for another image needs its own drop-in.
+func NewGoogleCOSTLSBootstrap(d drivers.Driver, authOptions auth.Options, engineOptions engine.Options, swarmOptions swarm.Options) (drivers.TLSBootstrap, error) {
 	var b drivers.TLSBootstrap
 
 	if err := copyCertsToMachineDir(authOptions); err != nil {

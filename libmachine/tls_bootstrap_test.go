@@ -3,6 +3,7 @@ package libmachine
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -26,12 +27,16 @@ import (
 type tlsBootstrapDriver struct {
 	*fakedriver.Driver
 	requested bool
+	setErr    error
 	bootstrap *drivers.TLSBootstrap
 }
 
 func (d *tlsBootstrapDriver) TLSBootstrapRequested() (bool, error) { return d.requested, nil }
 func (d *tlsBootstrapDriver) GetURL() (string, error)              { return "tcp://" + d.MockIP, nil }
 func (d *tlsBootstrapDriver) SetTLSBootstrap(b drivers.TLSBootstrap) error {
+	if d.setErr != nil {
+		return d.setErr
+	}
 	d.bootstrap = &b
 	return nil
 }
@@ -119,6 +124,14 @@ func TestPrepareTLSBootstrap(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, enabled)
 		assert.Nil(t, driver.bootstrap)
+		assert.Empty(t, h.HostOptions.AuthOptions.ServerName)
+	})
+
+	t.Run("driver rejecting it", func(t *testing.T) {
+		h, driver := newBootstrappedHost(t, "m")
+		driver.setErr = errors.New("no")
+		_, err := prepareTLSBootstrap(h)
+		require.ErrorContains(t, err, "no")
 		assert.Empty(t, h.HostOptions.AuthOptions.ServerName)
 	})
 

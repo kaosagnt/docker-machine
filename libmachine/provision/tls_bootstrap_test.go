@@ -45,7 +45,7 @@ func parseCert(t *testing.T, pemBytes []byte) *x509.Certificate {
 	return c
 }
 
-func TestNewTLSBootstrap(t *testing.T) {
+func TestNewGoogleCOSTLSBootstrap(t *testing.T) {
 	const machineName = "runner-abc-123"
 	authOptions := bootstrappedAuthOptions(t, machineName)
 	authOptions.ServerCertSANs = []string{"docker.example.test"}
@@ -55,7 +55,7 @@ func TestNewTLSBootstrap(t *testing.T) {
 		Labels:         []string{"shard=x"},
 	}
 
-	b, err := NewTLSBootstrap(driver, authOptions, engineOptions, swarm.Options{})
+	b, err := NewGoogleCOSTLSBootstrap(driver, authOptions, engineOptions, swarm.Options{})
 	require.NoError(t, err)
 
 	caCert, err := os.ReadFile(authOptions.CaCertPath)

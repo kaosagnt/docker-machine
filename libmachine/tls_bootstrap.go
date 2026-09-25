@@ -38,13 +38,16 @@ func prepareTLSBootstrap(h *host.Host) (bool, error) {
 
 	log.WithField("phase", "tls_bootstrap").Info("Generating the server certificate and Docker configuration...")
 
-	h.HostOptions.AuthOptions.ServerName = h.Name
-	b, err := provision.NewTLSBootstrap(h.Driver, *h.HostOptions.AuthOptions, *h.HostOptions.EngineOptions, *h.HostOptions.SwarmOptions)
+	b, err := provision.NewGoogleCOSTLSBootstrap(h.Driver, *h.HostOptions.AuthOptions, *h.HostOptions.EngineOptions, *h.HostOptions.SwarmOptions)
 	if err != nil {
 		return false, err
 	}
+	if err := bootstrapper.SetTLSBootstrap(b); err != nil {
+		return false, err
+	}
 
-	return true, bootstrapper.SetTLSBootstrap(b)
+	h.HostOptions.AuthOptions.ServerName = h.Name
+	return true, nil
 }
 
 // waitForTLS retries a TLS handshake against the machine's Docker port
