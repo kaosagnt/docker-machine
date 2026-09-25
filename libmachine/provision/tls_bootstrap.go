@@ -10,14 +10,13 @@ import (
 	"github.com/docker/machine/libmachine/swarm"
 )
 
-// NewTLSBootstrap generates the machine's server certificate and the
-// systemd drop-in that starts dockerd with it, for a driver to deliver at
-// create time. The machine has no address yet, so the certificate is only
-// valid for the machine name and clients have to verify against that
-// (auth.Options.ServerName).
+// NewTLSBootstrap generates the server certificate and the dockerd drop-in
+// for a driver to deliver at create time. The machine has no address yet,
+// so the certificate is issued for the machine name and clients verify
+// against that (auth.Options.ServerName).
 //
-// The drop-in is the Google COS one. COS is the only image with dockerd
-// preinstalled, which is what makes provisioning without SSH possible.
+// The drop-in is the Google COS one. COS ships dockerd, so it is the only
+// image that can be provisioned without SSH.
 func NewTLSBootstrap(d drivers.Driver, authOptions auth.Options, engineOptions engine.Options, swarmOptions swarm.Options) (drivers.TLSBootstrap, error) {
 	var b drivers.TLSBootstrap
 

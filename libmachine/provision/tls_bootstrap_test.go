@@ -16,8 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// bootstrappedAuthOptions creates a CA and client certificate in a temp
-// store, the way `docker-machine create` does before the driver runs.
+// bootstrappedAuthOptions creates a CA and client certificate in a temp store.
 func bootstrappedAuthOptions(t *testing.T, machineName string) auth.Options {
 	root := t.TempDir()
 	certDir := filepath.Join(root, "certs")
@@ -83,8 +82,6 @@ func TestNewTLSBootstrap(t *testing.T) {
 	assert.Contains(t, dropin, "--label provider=Driver")
 	assert.Contains(t, dropin, "--registry-mirror https://mirror.gcr.io")
 
-	// The client material is copied next to the server certificate, where
-	// `docker-machine env` and the runner look for it.
 	for _, name := range []string{"ca.pem", "cert.pem", "key.pem"} {
 		_, err := os.Stat(filepath.Join(authOptions.StorePath, name))
 		assert.NoError(t, err, name)

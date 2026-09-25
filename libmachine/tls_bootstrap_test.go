@@ -21,8 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// tlsBootstrapDriver records what libmachine hands over, like the google
-// driver does, and reports the loopback address the test server listens on.
+// tlsBootstrapDriver records what libmachine hands over and points at the
+// test server.
 type tlsBootstrapDriver struct {
 	*fakedriver.Driver
 	requested bool
@@ -70,8 +70,8 @@ func newBootstrappedHost(t *testing.T, machineName string) (*host.Host, *tlsBoot
 	return h, driver
 }
 
-// serveTLS accepts connections with the given server certificate on a
-// loopback port and points the driver at it.
+// serveTLS serves the given certificate on a loopback port and points the
+// driver at it.
 func serveTLS(t *testing.T, driver *tlsBootstrapDriver, b *drivers.TLSBootstrap) {
 	keypair, err := tls.X509KeyPair(b.ServerCert, b.ServerKey)
 	require.NoError(t, err)

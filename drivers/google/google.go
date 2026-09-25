@@ -22,8 +22,7 @@ type metadataMap map[string]string
 const cosWaitForCloudInitMetadataKey = "gitlab-wait-for-cloud-init"
 const cosDockerNetworkReadinessURLMetadataKey = "gitlab-docker-network-readiness-url"
 
-// Metadata keys the machine reads to start dockerd with TLS on its own,
-// when --google-cos-tls-via-metadata is set.
+// Metadata keys for --google-cos-tls-via-metadata.
 const (
 	tlsCACertMetadataKey          = "gitlab-docker-tls-ca"
 	tlsServerCertMetadataKey      = "gitlab-docker-tls-cert"
@@ -83,11 +82,10 @@ type Driver struct {
 	COSWaitForCloudInit          bool
 	COSDockerNetworkReadinessURL string
 
-	// COSTLSViaMetadata attaches the TLS material libmachine generates
-	// before Create as instance metadata, for a unit on the machine to
-	// install. libmachine then skips the SSH provisioner.
 	COSTLSViaMetadata bool
-	tlsBootstrap      *drivers.TLSBootstrap
+	// tlsBootstrap is not persisted. It only lives from SetTLSBootstrap to
+	// Create, in the plugin process.
+	tlsBootstrap *drivers.TLSBootstrap
 
 	// BulkInsert is the explicit opt-in for bulkInsert mode. Separate
 	// boolean rather than inferred from Region: keeps the provisioning
@@ -672,9 +670,7 @@ func (d *Driver) TLSBootstrapRequested() (bool, error) {
 	return d.COSTLSViaMetadata, nil
 }
 
-// SetTLSBootstrap implements drivers.TLSBootstrapper. The material is kept
-// in memory for the Create that follows; it is not part of the persisted
-// driver state.
+// SetTLSBootstrap implements drivers.TLSBootstrapper.
 func (d *Driver) SetTLSBootstrap(b drivers.TLSBootstrap) error {
 	if !d.COSTLSViaMetadata {
 		return errors.New("TLS bootstrap given without --google-cos-tls-via-metadata")

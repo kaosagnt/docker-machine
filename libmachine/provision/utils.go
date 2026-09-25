@@ -71,9 +71,8 @@ func setRemoteAuthOptions(p Provisioner) auth.Options {
 	return authOptions
 }
 
-// copyCertsToMachineDir copies the CA and client certificate into the
-// machine's store directory, where clients look for them next to the server
-// certificate.
+// copyCertsToMachineDir puts the CA and client certificate where
+// `docker-machine env` and the runner look for them.
 func copyCertsToMachineDir(authOptions auth.Options) error {
 	log.Info("Copying certs to the local machine directory...")
 
@@ -92,9 +91,8 @@ func copyCertsToMachineDir(authOptions auth.Options) error {
 	return nil
 }
 
-// generateServerCert writes the machine's server certificate and key. The
-// machine name and localhost are always in the SANs, on top of the
-// configured ones and whatever the caller adds (the IP, once known).
+// generateServerCert issues the server certificate. The IP is an extraHost
+// because it is only known once the machine exists.
 func generateServerCert(authOptions auth.Options, machineName string, swarmMaster bool, extraHosts ...string) error {
 	org := mcnutils.GetUsername() + "." + machineName
 	bits := 2048

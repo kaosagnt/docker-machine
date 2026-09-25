@@ -527,8 +527,8 @@ func (c *ComputeUtil) addFirewallTag(instance *raw.Instance) error {
 	return c.waitForRegionalOp(op.Name)
 }
 
-// uploadSSHKey updates the metadata of an existing instance with the given
-// ssh key. New instances get the key at insert time (see prepareMetadata).
+// uploadSSHKey adds the SSH key to an existing instance. New instances get
+// it in the insert request.
 func (c *ComputeUtil) uploadSSHKey(instance *raw.Instance, sshKeyPath string) error {
 	log.Infof("Uploading SSH Key")
 
@@ -545,8 +545,8 @@ func (c *ComputeUtil) uploadSSHKey(instance *raw.Instance, sshKeyPath string) er
 	return c.waitForRegionalOp(op.Name)
 }
 
-// appendSSHKeyMetadata adds the public key for the SSH user under both the
-// current and the deprecated metadata key, so that old images keep working.
+// Both the current and the deprecated key name, for images that still read
+// the old one.
 func (c *ComputeUtil) appendSSHKeyMetadata(metadata *raw.Metadata, sshKeyPath string) error {
 	sshKey, err := ioutil.ReadFile(sshKeyPath + ".pub")
 	if err != nil {
@@ -560,8 +560,6 @@ func (c *ComputeUtil) appendSSHKeyMetadata(metadata *raw.Metadata, sshKeyPath st
 	return nil
 }
 
-// prepareMetadata builds the metadata for a new instance: the configured
-// entries, the SSH key, and the TLS bootstrap when the driver has one.
 func (c *ComputeUtil) prepareMetadata(d *Driver) (*raw.Metadata, error) {
 	metadata := &raw.Metadata{
 		Items: make([]*raw.MetadataItems, 0),

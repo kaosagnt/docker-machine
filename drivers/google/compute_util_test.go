@@ -336,7 +336,6 @@ func TestPrepareMetadata(t *testing.T) {
 	missingMetadataFilePath := func(_ *testing.T) (metadataMap, func()) {
 		return metadataMap{"non-existing": ""}, func() {}
 	}
-	// Every new instance gets the SSH key, under both metadata names.
 	sshKeyValue := "cos:ssh-rsa AAAA cos cos\n"
 	emptyMetadata := func(t *testing.T, m *raw.Metadata) {
 		if !assert.NotNil(t, m) {
@@ -451,8 +450,7 @@ func TestPrepareMetadata(t *testing.T) {
 	}
 }
 
-// withSSHKey gives the driver a store in a temp dir with the public key
-// prepareMetadata reads.
+// withSSHKey gives the driver a store with a public key.
 func withSSHKey(t *testing.T, d *Driver) *Driver {
 	d.BaseDriver = &drivers.BaseDriver{MachineName: "m", StorePath: t.TempDir()}
 	writeSSHKey(t, d)

@@ -18,14 +18,14 @@ import (
 const (
 	tlsWaitTimeout  = 5 * time.Minute
 	tlsWaitInterval = time.Second
-	// A booting COS machine drops packets to the port until its firewall
-	// rule is in, so a dial can only time out. Keep that short.
+	// A booting COS machine drops packets to the port until its iptables
+	// rule is in, so dials time out rather than get refused.
 	tlsDialTimeout = 2 * time.Second
 )
 
-// prepareTLSBootstrap generates the TLS material and hands it to the driver
-// when the driver delivers it at create time. Returns whether it did, in
-// which case the SSH provisioner is not needed.
+// prepareTLSBootstrap generates the TLS material and hands it to a driver
+// that delivers it at create time. Returns whether it did, in which case the
+// SSH provisioner is skipped.
 func prepareTLSBootstrap(h *host.Host) (bool, error) {
 	bootstrapper, ok := h.Driver.(drivers.TLSBootstrapper)
 	if !ok {

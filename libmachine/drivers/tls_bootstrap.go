@@ -4,8 +4,7 @@ import "errors"
 
 var ErrTLSBootstrapNotSupported = errors.New("driver does not support delivering the TLS bootstrap at create time")
 
-// TLSBootstrap is what dockerd on the machine needs to serve TLS: the CA,
-// the server keypair, and the systemd drop-in that adds the TLS listener.
+// TLSBootstrap is what dockerd on the machine needs to serve TLS.
 type TLSBootstrap struct {
 	CACert       []byte
 	ServerCert   []byte
