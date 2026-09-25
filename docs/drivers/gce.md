@@ -121,7 +121,7 @@ has to restart it. A missing attribute should fail the unit; `docker-machine`
 then times out after five minutes and the create fails.
 
 The flag applies to new instances only and is rejected together with
-`--google-use-existing`. `--google-cos-docker-network-readiness-gate` and
+`--google-use-existing`. `--google-cos-wait-for-cloud-init` and
 `--google-cos-docker-network-readiness-url` are not checked, since the SSH
 provisioner does not run; order the unit that installs the TLS material
 after whatever else the VM has to finish before it is ready. `docker-machine

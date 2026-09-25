@@ -519,8 +519,8 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	if d.COSTLSViaMetadata && d.UseExisting {
 		return errors.New("--google-cos-tls-via-metadata and --google-use-existing are mutually exclusive: the TLS material is attached when the instance is inserted")
 	}
-	if d.COSTLSViaMetadata && (d.COSDockerNetworkReadinessGate || d.COSDockerNetworkReadinessURL != "") {
-		log.Warn("--google-cos-tls-via-metadata skips the SSH provisioner; the COS readiness gate and URL are not checked")
+	if d.COSTLSViaMetadata && (d.COSWaitForCloudInit || d.COSDockerNetworkReadinessURL != "") {
+		log.Warn("--google-cos-tls-via-metadata skips the SSH provisioner; --google-cos-wait-for-cloud-init and the readiness URL are not checked")
 	}
 
 	if d.BulkInsert {
