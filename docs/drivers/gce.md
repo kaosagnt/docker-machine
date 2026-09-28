@@ -92,9 +92,9 @@ With `--google-cos-tls-via-metadata`, the server certificate is issued for
 the machine name instead and generated before the VM exists, together with
 the drop-in. Both are attached to the instance as metadata and the VM
 installs them itself; `docker-machine` never connects over SSH during
-create. It waits for a TLS handshake on port 2376 with the machine's
-certificates and `ServerName` set to the machine name, then checks the
-Docker connection as usual. Clients have to verify the certificate against
+create. It waits until the Docker API on port 2376 answers a ping over TLS
+with the machine's certificates and `ServerName` set to the machine name,
+then checks the Docker connection as usual. Clients have to verify the certificate against
 the machine name rather than the address: `docker-machine` does so through
 `HostOptions.AuthOptions.ServerName` in the machine's `config.json`, other
 clients (the GitLab Runner docker+machine executor) read it from there. The

@@ -1,10 +1,12 @@
 package libmachine
 
 import (
+	"bufio"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -50,9 +52,10 @@ func prepareTLSBootstrap(h *host.Host) (bool, error) {
 	return true, nil
 }
 
-// waitForTLS retries a TLS handshake against the machine's Docker port
-// until it succeeds or the timeout passes. A certificate that fails
-// verification ends the wait at once.
+// waitForTLS retries a TLS handshake and a ping of the Docker API until
+// they succeed or the timeout passes. A server certificate that fails
+// verification, or a TLS alert from the server (it rejected our client
+// certificate), ends the wait at once.
 func waitForTLS(h *host.Host, timeout time.Duration) error {
 	dockerURL, err := h.Driver.GetURL()
 	if err != nil {
@@ -73,13 +76,19 @@ func waitForTLS(h *host.Host, timeout time.Duration) error {
 	for {
 		conn, err := tls.DialWithDialer(dialer, "tcp", u.Host, tlsConfig)
 		if err == nil {
+			err = pingDocker(conn, u.Host)
 			conn.Close()
-			return nil
+			if err == nil {
+				return nil
+			}
 		}
 
 		var certErr *tls.CertificateVerificationError
 		if errors.As(err, &certErr) {
 			return fmt.Errorf("the certificate presented on %s does not verify for %q: %w", u.Host, tlsConfig.ServerName, err)
+		}
+		if isTLSAlert(err) {
+			return fmt.Errorf("Docker on %s rejected the connection: %w", u.Host, err)
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("no TLS handshake on %s after %s: %w", u.Host, timeout, err)
@@ -88,4 +97,36 @@ func waitForTLS(h *host.Host, timeout time.Duration) error {
 		log.Debugf("TLS handshake on %s not up yet: %s", u.Host, err)
 		time.Sleep(tlsWaitInterval)
 	}
+}
+
+// pingDocker does one request on the connection. With TLS 1.3 the handshake
+// completes before the server has checked the client certificate, so only a
+// round trip shows whether dockerd accepts us.
+func pingDocker(conn *tls.Conn, host string) error {
+	if err := conn.SetDeadline(time.Now().Add(tlsDialTimeout)); err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodGet, "https://"+host+"/_ping", nil)
+	if err != nil {
+		return err
+	}
+	if err := req.Write(conn); err != nil {
+		return err
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Docker /_ping returned %s", resp.Status)
+	}
+	return nil
+}
+
+// isTLSAlert reports whether the server ended the connection with a TLS
+// alert. crypto/tls surfaces those as a net.OpError with Op "remote error".
+func isTLSAlert(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "remote error"
 }

@@ -348,7 +348,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.BoolFlag{
 			Name:   "google-cos-tls-via-metadata",
-			Usage:  "Deliver the Docker TLS certificates and daemon drop-in as instance metadata (" + tlsCACertMetadataKey + ", " + tlsServerCertMetadataKey + ", " + tlsServerKeyMetadataKey + ", " + dockerDaemonDropinMetadataKey + ") instead of provisioning over SSH. The image has to install them itself before starting dockerd on port 2376; docker-machine waits for the TLS handshake and does not SSH into the machine during create. The server certificate is issued for the machine name, so clients have to verify against it.",
+			Usage:  "Deliver the Docker TLS certificates and daemon drop-in as instance metadata (" + tlsCACertMetadataKey + ", " + tlsServerCertMetadataKey + ", " + tlsServerKeyMetadataKey + ", " + dockerDaemonDropinMetadataKey + ") instead of provisioning over SSH. The image has to install them itself before starting dockerd on port 2376; docker-machine waits for the Docker API to answer over TLS and does not SSH into the machine during create. The server certificate is issued for the machine name, so clients have to verify against it.",
 			EnvVar: "GOOGLE_COS_TLS_VIA_METADATA",
 		},
 		mcnflag.BoolFlag{

@@ -4,7 +4,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -75,13 +77,14 @@ func newBootstrappedHost(t *testing.T, machineName string) (*host.Host, *tlsBoot
 	return h, driver
 }
 
-// serveTLS serves the given certificate on a loopback port and points the
-// driver at it.
-func serveTLS(t *testing.T, driver *tlsBootstrapDriver, b *drivers.TLSBootstrap) {
+// serveTLS answers /_ping on a loopback port with the given server
+// certificate, accepting clients signed by clientCA, and points the driver
+// at it.
+func serveTLS(t *testing.T, driver *tlsBootstrapDriver, b *drivers.TLSBootstrap, clientCA []byte) {
 	keypair, err := tls.X509KeyPair(b.ServerCert, b.ServerKey)
 	require.NoError(t, err)
 	clientCAs := x509.NewCertPool()
-	require.True(t, clientCAs.AppendCertsFromPEM(b.CACert))
+	require.True(t, clientCAs.AppendCertsFromPEM(clientCA))
 
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
 		Certificates: []tls.Certificate{keypair},
@@ -89,20 +92,16 @@ func serveTLS(t *testing.T, driver *tlsBootstrapDriver, b *drivers.TLSBootstrap)
 		ClientCAs:    clientCAs,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { ln.Close() })
 
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go func() {
-				_ = conn.(*tls.Conn).Handshake()
-				conn.Close()
-			}()
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/_ping" {
+			http.NotFound(w, r)
+			return
 		}
-	}()
+		fmt.Fprint(w, "OK")
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
 
 	driver.MockIP = ln.Addr().String()
 }
@@ -151,9 +150,26 @@ func TestWaitForTLS(t *testing.T) {
 		h, driver := newBootstrappedHost(t, "m")
 		_, err := prepareTLSBootstrap(h)
 		require.NoError(t, err)
-		serveTLS(t, driver, driver.bootstrap)
+		serveTLS(t, driver, driver.bootstrap, driver.bootstrap.CACert)
 
 		require.NoError(t, waitForTLS(h, 5*time.Second))
+	})
+
+	t.Run("client certificate rejected fails without waiting", func(t *testing.T) {
+		other, _ := newBootstrappedHost(t, "other")
+		otherCA, err := os.ReadFile(other.HostOptions.AuthOptions.CaCertPath)
+		require.NoError(t, err)
+
+		h, driver := newBootstrappedHost(t, "m")
+		_, err = prepareTLSBootstrap(h)
+		require.NoError(t, err)
+		serveTLS(t, driver, driver.bootstrap, otherCA)
+
+		start := time.Now()
+		err = waitForTLS(h, time.Minute)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "rejected the connection")
+		assert.Less(t, time.Since(start), 10*time.Second)
 	})
 
 	t.Run("certificate for another machine fails without waiting", func(t *testing.T) {
@@ -165,7 +181,7 @@ func TestWaitForTLS(t *testing.T) {
 		h, driver := newBootstrappedHost(t, "m")
 		h.HostOptions.AuthOptions = other.HostOptions.AuthOptions
 		h.HostOptions.AuthOptions.ServerName = "m"
-		serveTLS(t, driver, otherDriver.bootstrap)
+		serveTLS(t, driver, otherDriver.bootstrap, otherDriver.bootstrap.CACert)
 
 		start := time.Now()
 		err = waitForTLS(h, time.Minute)
