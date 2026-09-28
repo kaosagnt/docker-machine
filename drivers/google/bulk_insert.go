@@ -326,7 +326,7 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver, sel flexSelec
 		net = c.globalURL + "/networks/" + d.Network
 	}
 
-	metadata, err := prepareMetadata(d)
+	metadata, err := c.prepareMetadata(d)
 	if err != nil {
 		return nil, err
 	}
@@ -759,7 +759,7 @@ func (c *ComputeUtil) resolvePlacedZone() (string, error) {
 // finishPostCreate runs the post-bulkInsert work: resolve the zone GCP
 // placed the VM in, set the driver / compute-util zone fields, fetch
 // the instance, record the flex-picked machine type, add the firewall
-// tag, push the SSH key.
+// tag.
 func (c *ComputeUtil) finishPostCreate(d *Driver) error {
 	zone, err := c.resolvePlacedZone()
 	if err != nil {
@@ -781,7 +781,7 @@ func (c *ComputeUtil) finishPostCreate(d *Driver) error {
 		return fmt.Errorf("adding firewall tag to bulkInsert instance %q: %w", c.instanceName, err)
 	}
 
-	return c.uploadSSHKey(instance, d.GetSSHKeyPath())
+	return nil
 }
 
 // syncResolvedMachineType records the machine type GCP actually placed.

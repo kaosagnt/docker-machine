@@ -246,7 +246,13 @@ func (xcg *X509CertGenerator) ReadTLSConfig(addr string, authOptions *auth.Optio
 		return nil, err
 	}
 
-	return xcg.getTLSConfig(caCert, clientCert, clientKey, false)
+	tlsConfig, err := xcg.getTLSConfig(caCert, clientCert, clientKey, false)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig.ServerName = authOptions.ServerName
+
+	return tlsConfig, nil
 }
 
 // ValidateCertificate validate the certificate installed on the vm.

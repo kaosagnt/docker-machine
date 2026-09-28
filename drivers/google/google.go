@@ -22,6 +22,14 @@ type metadataMap map[string]string
 const cosWaitForCloudInitMetadataKey = "gitlab-wait-for-cloud-init"
 const cosDockerNetworkReadinessURLMetadataKey = "gitlab-docker-network-readiness-url"
 
+// Metadata keys for --google-cos-tls-via-metadata.
+const (
+	tlsCACertMetadataKey          = "gitlab-docker-tls-ca"
+	tlsServerCertMetadataKey      = "gitlab-docker-tls-cert"
+	tlsServerKeyMetadataKey       = "gitlab-docker-tls-key"
+	dockerDaemonDropinMetadataKey = "gitlab-docker-daemon-dropin"
+)
+
 type backoffFactory struct {
 	InitialInterval     time.Duration
 	RandomizationFactor float64
@@ -73,6 +81,11 @@ type Driver struct {
 	SkipFirewall                 bool
 	COSWaitForCloudInit          bool
 	COSDockerNetworkReadinessURL string
+
+	COSTLSViaMetadata bool
+	// tlsBootstrap is not persisted. It only lives from SetTLSBootstrap to
+	// Create, in the plugin process.
+	tlsBootstrap *drivers.TLSBootstrap
 
 	// BulkInsert is the explicit opt-in for bulkInsert mode. Separate
 	// boolean rather than inferred from Region: keeps the provisioning
@@ -334,6 +347,11 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			EnvVar: "GOOGLE_COS_DOCKER_NETWORK_READINESS_URL",
 		},
 		mcnflag.BoolFlag{
+			Name:   "google-cos-tls-via-metadata",
+			Usage:  "Deliver the Docker TLS certificates and daemon drop-in as instance metadata (" + tlsCACertMetadataKey + ", " + tlsServerCertMetadataKey + ", " + tlsServerKeyMetadataKey + ", " + dockerDaemonDropinMetadataKey + ") instead of provisioning over SSH. The image has to install them itself before starting dockerd on port 2376; docker-machine waits for the Docker API to answer over TLS and does not SSH into the machine during create. The server certificate is issued for the machine name, so clients have to verify against it.",
+			EnvVar: "GOOGLE_COS_TLS_VIA_METADATA",
+		},
+		mcnflag.BoolFlag{
 			Name:   "google-bulk-insert",
 			Usage:  "(Experimental) Provision via RegionInstances.BulkInsert with a multi-zone LocationPolicy rather than zonal Instances.Insert. The driver issues one BulkInsert per --google-flex-selection entry in preference order, advancing to the next selection on stockout-class failures (VM_MIN_COUNT_NOT_REACHED, ZONE_RESOURCE_POOL_EXHAUSTED). With no --google-flex-selection a single selection is synthesised from --google-machine-type / --google-disk-type. Requires --google-region; mutually exclusive with --google-zone.",
 			EnvVar: "GOOGLE_BULK_INSERT",
@@ -495,6 +513,14 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		return fmt.Errorf("google-flex-stockout-probe-lease must be > 0 when stockout cooldown is enabled, got %s", d.FlexStockoutProbeLease)
 	}
 
+	d.COSTLSViaMetadata = flags.Bool("google-cos-tls-via-metadata")
+	if d.COSTLSViaMetadata && d.UseExisting {
+		return errors.New("--google-cos-tls-via-metadata and --google-use-existing are mutually exclusive: the TLS material is attached when the instance is inserted")
+	}
+	if d.COSTLSViaMetadata && (d.COSWaitForCloudInit || d.COSDockerNetworkReadinessURL != "") {
+		log.Warn("--google-cos-tls-via-metadata skips the SSH provisioner; --google-cos-wait-for-cloud-init and the readiness URL are not checked")
+	}
+
 	if d.BulkInsert {
 		if d.UseExisting {
 			return errors.New("--google-bulk-insert and --google-use-existing are mutually exclusive: bulkInsert provisions a new VM")
@@ -639,8 +665,29 @@ func (d *Driver) PreCreateCheck() error {
 	return nil
 }
 
+// TLSBootstrapRequested implements drivers.TLSBootstrapper.
+func (d *Driver) TLSBootstrapRequested() (bool, error) {
+	return d.COSTLSViaMetadata, nil
+}
+
+// SetTLSBootstrap implements drivers.TLSBootstrapper.
+func (d *Driver) SetTLSBootstrap(b drivers.TLSBootstrap) error {
+	if !d.COSTLSViaMetadata {
+		return errors.New("TLS bootstrap given without --google-cos-tls-via-metadata")
+	}
+	if len(b.CACert) == 0 || len(b.ServerCert) == 0 || len(b.ServerKey) == 0 || len(b.DaemonDropin) == 0 {
+		return errors.New("TLS bootstrap is incomplete: CA certificate, server certificate, server key and daemon drop-in are all required")
+	}
+	d.tlsBootstrap = &b
+	return nil
+}
+
 // Create creates a GCE VM instance acting as a docker host.
 func (d *Driver) Create() error {
+	if d.COSTLSViaMetadata && d.tlsBootstrap == nil {
+		return errors.New("--google-cos-tls-via-metadata is set but no TLS bootstrap was provided before Create")
+	}
+
 	log.Infof("Generating SSH Key")
 
 	if err := ssh.GenerateSSHKey(d.GetSSHKeyPath()); err != nil {
@@ -754,10 +801,8 @@ func (d *Driver) Start() error {
 	}
 
 	if instance == nil {
-		// bulkInsert can't reuse the existing disk: a fresh BulkInsert
-		// picks a new zone and builds a new disk, orphaning the old one.
-		if d.BulkInsert {
-			return fmt.Errorf("instance %q not found and --google-bulk-insert mode does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
+		if err := d.recreateFromDiskSupported(); err != nil {
+			return err
 		}
 		if err = c.createInstance(d); err != nil {
 			return err
@@ -770,6 +815,23 @@ func (d *Driver) Start() error {
 
 	d.IPAddress, err = d.GetIP()
 	return err
+}
+
+// recreateFromDiskSupported reports whether Start may insert a new instance
+// on the existing disk when the instance record is gone.
+func (d *Driver) recreateFromDiskSupported() error {
+	// bulkInsert can't reuse the existing disk: a fresh BulkInsert
+	// picks a new zone and builds a new disk, orphaning the old one.
+	if d.BulkInsert {
+		return fmt.Errorf("instance %q not found and --google-bulk-insert mode does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
+	}
+	// The TLS material is only attached to the original insert, and COS
+	// keeps /etc on a tmpfs overlay, so a new instance on the old disk
+	// would boot without it.
+	if d.COSTLSViaMetadata {
+		return fmt.Errorf("instance %q not found and --google-cos-tls-via-metadata does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
+	}
+	return nil
 }
 
 // Stop stops an existing GCE instance.

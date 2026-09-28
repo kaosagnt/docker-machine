@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/docker/machine/libmachine/drivers"
 	"github.com/docker/machine/libmachine/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -334,19 +336,43 @@ func TestPrepareMetadata(t *testing.T) {
 	missingMetadataFilePath := func(_ *testing.T) (metadataMap, func()) {
 		return metadataMap{"non-existing": ""}, func() {}
 	}
+	sshKeyValue := "cos:ssh-rsa AAAA cos cos\n"
 	emptyMetadata := func(t *testing.T, m *raw.Metadata) {
 		if !assert.NotNil(t, m) {
 			t.FailNow()
 		}
-		assert.Empty(t, m.Items)
+		assert.Len(t, m.Items, 2)
+		assertMetadata(t, m, "ssh-keys", sshKeyValue)
+		assertMetadata(t, m, "sshKeys", sshKeyValue)
+	}
+
+	tlsBootstrap := &drivers.TLSBootstrap{
+		CACert:       []byte("ca"),
+		ServerCert:   []byte("cert"),
+		ServerKey:    []byte("key"),
+		DaemonDropin: []byte("[Service]\nExecStart=dockerd"),
 	}
 
 	tests := map[string]struct {
 		metadata       metadataMap
 		metadataFiles  func(t *testing.T) (metadataMap, func())
+		tlsBootstrap   *drivers.TLSBootstrap
 		expectedError  bool
 		assertMetadata func(t *testing.T, m *raw.Metadata)
 	}{
+		"tls bootstrap attached": {
+			metadata:      metadata,
+			metadataFiles: noMetadataFile,
+			tlsBootstrap:  tlsBootstrap,
+			assertMetadata: func(t *testing.T, m *raw.Metadata) {
+				assertMetadata(t, m, metadataKey1, metadataValue1)
+				assertMetadata(t, m, "ssh-keys", sshKeyValue)
+				assertMetadata(t, m, tlsCACertMetadataKey, "ca")
+				assertMetadata(t, m, tlsServerCertMetadataKey, "cert")
+				assertMetadata(t, m, tlsServerKeyMetadataKey, "key")
+				assertMetadata(t, m, dockerDaemonDropinMetadataKey, "[Service]\nExecStart=dockerd")
+			},
+		},
 		"error on metadata file reading": {
 			metadataFiles:  failingMetadataFile,
 			expectedError:  true,
@@ -404,10 +430,14 @@ func TestPrepareMetadata(t *testing.T) {
 			metadataFiles, cleanup := tt.metadataFiles(t)
 			defer cleanup()
 
-			metadata, err := prepareMetadata(&Driver{
+			d := withSSHKey(t, &Driver{
 				Metadata:         tt.metadata,
 				MetadataFromFile: metadataFiles,
+				tlsBootstrap:     tt.tlsBootstrap,
 			})
+
+			c := &ComputeUtil{userName: "cos"}
+			metadata, err := c.prepareMetadata(d)
 
 			if tt.expectedError {
 				assert.Error(t, err)
@@ -418,6 +448,18 @@ func TestPrepareMetadata(t *testing.T) {
 			tt.assertMetadata(t, metadata)
 		})
 	}
+}
+
+// withSSHKey gives the driver a store with a public key.
+func withSSHKey(t *testing.T, d *Driver) *Driver {
+	d.BaseDriver = &drivers.BaseDriver{MachineName: "m", StorePath: t.TempDir()}
+	writeSSHKey(t, d)
+	return d
+}
+
+func writeSSHKey(t *testing.T, d *Driver) {
+	require.NoError(t, os.MkdirAll(filepath.Dir(d.GetSSHKeyPath()), 0o700))
+	require.NoError(t, os.WriteFile(d.GetSSHKeyPath()+".pub", []byte("ssh-rsa AAAA cos\n"), 0o600))
 }
 
 func assertMetadata(t *testing.T, m *raw.Metadata, key string, value string) {

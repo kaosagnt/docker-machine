@@ -229,6 +229,25 @@ func (r *RPCServerDriver) UpdateLabels(labels map[string]string, _ *struct{}) er
 	return updater.UpdateLabels(labels)
 }
 
+func (r *RPCServerDriver) TLSBootstrapRequested(_ *struct{}, requested *bool) error {
+	bootstrapper, ok := r.ActualDriver.(drivers.TLSBootstrapper)
+	if !ok {
+		*requested = false
+		return nil
+	}
+	var err error
+	*requested, err = bootstrapper.TLSBootstrapRequested()
+	return err
+}
+
+func (r *RPCServerDriver) SetTLSBootstrap(b drivers.TLSBootstrap, _ *struct{}) error {
+	bootstrapper, ok := r.ActualDriver.(drivers.TLSBootstrapper)
+	if !ok {
+		return drivers.ErrTLSBootstrapNotSupported
+	}
+	return bootstrapper.SetTLSBootstrap(b)
+}
+
 func (r *RPCServerDriver) Heartbeat(_ *struct{}, _ *struct{}) error {
 	r.HeartbeatCh <- true
 	return nil

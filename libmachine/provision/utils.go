@@ -71,23 +71,9 @@ func setRemoteAuthOptions(p Provisioner) auth.Options {
 	return authOptions
 }
 
-func ConfigureAuth(p Provisioner) error {
-	var (
-		err error
-	)
-
-	driver := p.GetDriver()
-	machineName := driver.GetMachineName()
-	authOptions := p.GetAuthOptions()
-	swarmOptions := p.GetSwarmOptions()
-	org := mcnutils.GetUsername() + "." + machineName
-	bits := 2048
-
-	ip, err := driver.GetIP()
-	if err != nil {
-		return err
-	}
-
+// copyCertsToMachineDir puts the CA and client certificate where
+// `docker-machine env` and the runner look for them.
+func copyCertsToMachineDir(authOptions auth.Options) error {
 	log.Info("Copying certs to the local machine directory...")
 
 	if err := mcnutils.CopyFile(authOptions.CaCertPath, filepath.Join(authOptions.StorePath, "ca.pem")); err != nil {
@@ -102,8 +88,17 @@ func ConfigureAuth(p Provisioner) error {
 		return fmt.Errorf("Copying key.pem to machine dir failed: %s", err)
 	}
 
-	// The Host IP is always added to the certificate's SANs list
-	hosts := append(authOptions.ServerCertSANs, ip, "localhost")
+	return nil
+}
+
+// generateServerCert issues the server certificate. The IP is an extraHost
+// because it is only known once the machine exists.
+func generateServerCert(authOptions auth.Options, machineName string, swarmMaster bool, extraHosts ...string) error {
+	org := mcnutils.GetUsername() + "." + machineName
+	bits := 2048
+
+	hosts := append(append([]string{}, authOptions.ServerCertSANs...), extraHosts...)
+	hosts = append(hosts, machineName, "localhost")
 	log.Debugf("generating server cert: %s ca-key=%s private-key=%s org=%s san=%s",
 		authOptions.ServerCertPath,
 		authOptions.CaCertPath,
@@ -112,9 +107,7 @@ func ConfigureAuth(p Provisioner) error {
 		hosts,
 	)
 
-	// TODO: Switch to passing just authOptions to this func
-	// instead of all these individual fields
-	err = cert.GenerateCert(&cert.Options{
+	err := cert.GenerateCert(&cert.Options{
 		Hosts:       hosts,
 		CertFile:    authOptions.ServerCertPath,
 		KeyFile:     authOptions.ServerKeyPath,
@@ -122,11 +115,36 @@ func ConfigureAuth(p Provisioner) error {
 		CAKeyFile:   authOptions.CaPrivateKeyPath,
 		Org:         org,
 		Bits:        bits,
-		SwarmMaster: swarmOptions.Master,
+		SwarmMaster: swarmMaster,
 	})
-
 	if err != nil {
 		return fmt.Errorf("error generating server cert: %s", err)
+	}
+
+	return nil
+}
+
+func ConfigureAuth(p Provisioner) error {
+	var (
+		err error
+	)
+
+	driver := p.GetDriver()
+	machineName := driver.GetMachineName()
+	authOptions := p.GetAuthOptions()
+	swarmOptions := p.GetSwarmOptions()
+
+	ip, err := driver.GetIP()
+	if err != nil {
+		return err
+	}
+
+	if err := copyCertsToMachineDir(authOptions); err != nil {
+		return err
+	}
+
+	if err := generateServerCert(authOptions, machineName, swarmOptions.Master, ip); err != nil {
+		return err
 	}
 
 	if err := p.Service("docker", serviceaction.Stop); err != nil {

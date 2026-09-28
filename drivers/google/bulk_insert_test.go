@@ -243,7 +243,7 @@ func TestBuildBulkInsertInstanceProperties_BareNamesAndSelectionFields(t *testin
 		DiskIops:       3000,
 		DiskThroughput: 140,
 	}
-	props, err := c.buildBulkInsertInstanceProperties(d, sel)
+	props, err := c.buildBulkInsertInstanceProperties(withSSHKey(t, d), sel)
 	require.NoError(t, err)
 	require.NotNil(t, props)
 
@@ -297,7 +297,7 @@ func TestBuildBulkInsertInstanceProperties_SelectionWithoutDiskOverride(t *testi
 	}
 
 	sel := flexSelection{MachineType: "n2d-standard-2"}
-	props, err := c.buildBulkInsertInstanceProperties(d, sel)
+	props, err := c.buildBulkInsertInstanceProperties(withSSHKey(t, d), sel)
 	require.NoError(t, err)
 	require.NotNil(t, props)
 
@@ -728,7 +728,7 @@ func TestAttemptBulkInsertForSelection_SyncStockoutIsRetryable(t *testing.T) {
 			defer srv.Close()
 
 			c := newBulkInsertComputeUtil(t, srv)
-			retryable, err := c.attemptBulkInsertForSelection(&Driver{Network: "default"}, flexSelection{MachineType: "n2d-standard-2"})
+			retryable, err := c.attemptBulkInsertForSelection(withSSHKey(t, &Driver{Network: "default"}), flexSelection{MachineType: "n2d-standard-2"})
 
 			assert.Equal(t, tc.wantRetryable, retryable)
 			if tc.wantErr {
@@ -773,7 +773,7 @@ func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
 			"machine-type=n4-standard-2",
 		}
 
-		err := c.createInstanceViaBulkInsert(&Driver{Network: "default"})
+		err := c.createInstanceViaBulkInsert(withSSHKey(t, &Driver{Network: "default"}))
 
 		require.Error(t, err)
 		// The loop must have advanced through ALL three selections, not
@@ -801,7 +801,7 @@ func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
 			"machine-type=n2d-standard-2",
 		}
 
-		err := c.createInstanceViaBulkInsert(&Driver{Network: "default"})
+		err := c.createInstanceViaBulkInsert(withSSHKey(t, &Driver{Network: "default"}))
 
 		require.Error(t, err)
 		// A non-stockout (fatal) rejection must short-circuit the loop:
@@ -836,7 +836,7 @@ func TestCreateInstanceViaBulkInsert_LoopAdvancesOnSyncStockout(t *testing.T) {
 			"machine-type=n2d-standard-2",
 		}
 
-		err := c.createInstanceViaBulkInsert(&Driver{Network: "default"})
+		err := c.createInstanceViaBulkInsert(withSSHKey(t, &Driver{Network: "default"}))
 
 		require.Error(t, err)
 		assert.Equal(t, int32(2), bulkInsertCalls.Load(), "429 details-only stockout should advance through every selection")
@@ -867,6 +867,7 @@ func TestCreateInstanceViaBulkInsert_CooldownReordersNextCreate(t *testing.T) {
 	defer srv.Close()
 
 	d := NewDriver("runner-abc", t.TempDir())
+	writeSSHKey(t, d)
 	d.Network = "default"
 	d.Project = "p"
 	d.Region = "us-east1"
@@ -1090,7 +1091,7 @@ func TestAttemptBulkInsertForSelection_SuccessSetsPlacedZone(t *testing.T) {
 	// Pre-seed a stale zone to prove the reset path clears it before use.
 	c.placedZone = "stale-zone-from-prior-attempt"
 
-	retryable, err := c.attemptBulkInsertForSelection(&Driver{Network: "default"}, flexSelection{MachineType: "n4-standard-2"})
+	retryable, err := c.attemptBulkInsertForSelection(withSSHKey(t, &Driver{Network: "default"}), flexSelection{MachineType: "n4-standard-2"})
 
 	require.NoError(t, err)
 	assert.False(t, retryable)
@@ -1134,7 +1135,7 @@ func TestAttemptBulkInsertForSelection_SalvagesZoneOnOpError(t *testing.T) {
 
 	c := newBulkInsertComputeUtil(t, srv)
 	c.regionExplicit = "us-east1"
-	d := &Driver{Network: "default"}
+	d := withSSHKey(t, &Driver{Network: "default"})
 
 	retryable, err := c.attemptBulkInsertForSelection(d, flexSelection{MachineType: "n4-standard-2"})
 
@@ -1166,13 +1167,13 @@ func TestBuildBulkInsertInstanceProperties_ServiceAccount(t *testing.T) {
 		}
 	}
 
-	props, err := c.buildBulkInsertInstanceProperties(newDriver(false), sel)
+	props, err := c.buildBulkInsertInstanceProperties(withSSHKey(t, newDriver(false)), sel)
 	require.NoError(t, err)
 	require.Len(t, props.ServiceAccounts, 1)
 	assert.Equal(t, defaultServiceAccount, props.ServiceAccounts[0].Email)
 	assert.Equal(t, strings.Split(defaultScopes, ","), props.ServiceAccounts[0].Scopes)
 
-	props, err = c.buildBulkInsertInstanceProperties(newDriver(true), sel)
+	props, err = c.buildBulkInsertInstanceProperties(withSSHKey(t, newDriver(true)), sel)
 	require.NoError(t, err)
 	assert.Nil(t, props.ServiceAccounts)
 }
