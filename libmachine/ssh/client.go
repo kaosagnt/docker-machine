@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/mcnutils"
@@ -35,6 +37,16 @@ type Client interface {
 	Wait() error
 }
 
+// ContextClient is implemented by clients that can abandon an in-flight
+// command when ctx ends: the external client kills its ssh process and the
+// native client closes its connection. The SSH readiness probe uses it so a
+// readiness deadline stops a blocked probe instead of only skipping the next
+// one. It is separate from Client so other Client implementations still
+// compile.
+type ContextClient interface {
+	OutputContext(ctx context.Context, command string) (string, error)
+}
+
 type ExternalClient struct {
 	BaseArgs   []string
 	BinaryPath string
@@ -58,6 +70,11 @@ type ClientType string
 
 const (
 	maxDialAttempts = 10
+
+	// externalCancelWaitDelay bounds how long OutputContext waits for the
+	// output pipes to close after killing ssh, in case something else
+	// inherited them.
+	externalCancelWaitDelay = 5 * time.Second
 )
 
 const (
@@ -195,6 +212,40 @@ func (client *NativeClient) Output(command string) (string, error) {
 	output, err := session.CombinedOutput(command)
 
 	return string(output), err
+}
+
+// OutputContext runs command over a single dial. Unlike Output it does not
+// retry the dial (the caller's loop does), and closing the connection when
+// ctx ends unblocks the dial, handshake and session.
+func (client *NativeClient) OutputContext(ctx context.Context, command string) (string, error) {
+	addr := net.JoinHostPort(client.Hostname, strconv.Itoa(client.Port))
+
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return "", contextErr(ctx, err)
+	}
+	// sshClient.Close also closes conn; this covers the paths before it
+	// exists, and ignores the second close.
+	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, &client.Config)
+	if err != nil {
+		return "", contextErr(ctx, err)
+	}
+	sshClient := ssh.NewClient(c, chans, reqs)
+	defer closeConn(sshClient)
+
+	session, err := sshClient.NewSession()
+	if err != nil {
+		return "", contextErr(ctx, err)
+	}
+	defer session.Close()
+
+	output, err := session.CombinedOutput(command)
+	return string(output), contextErr(ctx, err)
 }
 
 func (client *NativeClient) OutputWithPty(command string) (string, error) {
@@ -391,6 +442,18 @@ func (client *ExternalClient) Output(command string) (string, error) {
 	return string(output), err
 }
 
+// OutputContext is Output, except that ssh is killed when ctx ends.
+func (client *ExternalClient) OutputContext(ctx context.Context, command string) (string, error) {
+	// Copy rather than append to BaseArgs, which may share its backing array.
+	args := make([]string, 0, len(client.BaseArgs)+1)
+	args = append(append(args, client.BaseArgs...), command)
+
+	cmd := exec.CommandContext(ctx, client.BinaryPath, args...)
+	cmd.WaitDelay = externalCancelWaitDelay
+	output, err := cmd.CombinedOutput()
+	return string(output), contextErr(ctx, err)
+}
+
 func (client *ExternalClient) Shell(args ...string) error {
 	args = append(client.BaseArgs, args...)
 	cmd := getSSHCmd(client.BinaryPath, args...)
@@ -439,6 +502,15 @@ func (client *ExternalClient) Wait() error {
 	err := client.cmd.Wait()
 	client.cmd = nil
 	return err
+}
+
+// contextErr reports a failure caused by ctx ending as ctx's error, so callers
+// can tell a deadline from a transport failure with errors.Is.
+func contextErr(ctx context.Context, err error) error {
+	if err == nil || ctx.Err() == nil {
+		return err
+	}
+	return fmt.Errorf("%w (%v)", ctx.Err(), err)
 }
 
 func closeConn(c io.Closer) {
