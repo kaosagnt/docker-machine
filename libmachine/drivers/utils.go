@@ -257,7 +257,9 @@ func sshAvailableFunc(d Driver) func() bool {
 const sshReadinessTimeoutEnv = "DOCKER_MACHINE_SSH_READINESS_TIMEOUT"
 
 // ErrSSHReadinessTimeout is returned by WaitForSSH when the readiness deadline
-// passes before an SSH probe succeeds.
+// passes before an SSH probe succeeds. Drivers that call WaitForSSH from their
+// plugin process return it over RPC as text, so errors.Is only works
+// in-process.
 var ErrSSHReadinessTimeout = errors.New("SSH readiness deadline exceeded")
 
 // sshReadinessParams are the knobs of the deadline-bounded readiness loop.
@@ -314,7 +316,9 @@ func WaitForSSH(d Driver) error {
 
 // waitForSSHWithin probes like the legacy loop, but stops at timeout: the
 // in-flight probe is cancelled (its ssh process killed, or its connection
-// closed) and no further probe starts.
+// closed) and no further probe starts. A probe that succeeds as the deadline
+// passes still counts: the host answered, so there is nothing to gain by
+// discarding it.
 func waitForSSHWithin(d Driver, timeout time.Duration, params sshReadinessParams) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

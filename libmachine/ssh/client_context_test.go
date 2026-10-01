@@ -90,6 +90,38 @@ func TestExternalClientOutputContextKillsBlockedSSH(t *testing.T) {
 	}
 }
 
+func TestExternalClientOutputContextBoundsInheritedPipes(t *testing.T) {
+	t.Parallel()
+
+	// A background child keeps ssh's output pipe open after ssh is killed;
+	// WaitDelay must stop CombinedOutput from waiting for it.
+	binary, pidFile := writeFakeSSH(t, "sleep 60 &\nexec sleep 60")
+	client := &ExternalClient{BinaryPath: binary, BaseArgs: []string{"user@host"}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for {
+			if data, err := os.ReadFile(pidFile); err == nil && strings.HasSuffix(string(data), "\n") {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	started := time.Now()
+	_, err := client.OutputContext(ctx, "exit 0")
+	elapsed := time.Since(started)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if elapsed > externalCancelWaitDelay+5*time.Second {
+		t.Fatalf("OutputContext returned after %s; WaitDelay is %s", elapsed, externalCancelWaitDelay)
+	}
+}
+
 func TestExternalClientOutputContextSuccess(t *testing.T) {
 	t.Parallel()
 

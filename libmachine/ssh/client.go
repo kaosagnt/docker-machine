@@ -47,6 +47,12 @@ type ContextClient interface {
 	OutputContext(ctx context.Context, command string) (string, error)
 }
 
+// NewClient returns only these two types; keep both cancellable.
+var (
+	_ ContextClient = (*ExternalClient)(nil)
+	_ ContextClient = (*NativeClient)(nil)
+)
+
 type ExternalClient struct {
 	BaseArgs   []string
 	BinaryPath string
