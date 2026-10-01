@@ -76,6 +76,32 @@ func TestWaitForSSHWithinCancelsBlockedProbe(t *testing.T) {
 	}
 }
 
+func TestWaitForSSHWithinExpiredDeadlineStartsNoProbe(t *testing.T) {
+	t.Parallel()
+
+	// A non-positive timeout yields an already-expired context.
+	var factoryCalls atomic.Int32
+	params := sshReadinessParams{
+		clientFactory: func(Driver) (ssh.Client, error) {
+			factoryCalls.Add(1)
+			return nil, errors.New("must not be called")
+		},
+		maxAttempts: 60,
+	}
+
+	err := waitForSSHWithin(nil, 0, params)
+
+	if !errors.Is(err, ErrSSHReadinessTimeout) {
+		t.Fatalf("err = %v, want ErrSSHReadinessTimeout", err)
+	}
+	if got := factoryCalls.Load(); got != 0 {
+		t.Fatalf("client factory called %d times after the deadline", got)
+	}
+	if !strings.Contains(err.Error(), "0 probes") || !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Errorf("error %q should report 0 probes and the deadline", err)
+	}
+}
+
 func TestWaitForSSHWithinDeadlineDuringBackoff(t *testing.T) {
 	t.Parallel()
 

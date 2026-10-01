@@ -94,15 +94,27 @@ func TestExternalClientOutputContextBoundsInheritedPipes(t *testing.T) {
 	t.Parallel()
 
 	// A background child keeps ssh's output pipe open after ssh is killed;
-	// WaitDelay must stop CombinedOutput from waiting for it.
-	binary, pidFile := writeFakeSSH(t, "sleep 60 &\nexec sleep 60")
+	// WaitDelay must stop CombinedOutput from waiting for it. OpenSSH starts
+	// no such child with baseSSHArgs; this only exercises the bound. The
+	// child is not ours to kill via ssh, so the test cleans it up itself.
+	dir := t.TempDir()
+	childPID := filepath.Join(dir, "child")
+	binary, _ := writeFakeSSH(t, "sleep 60 &\necho $! > "+childPID+"\nexec sleep 60")
+	t.Cleanup(func() {
+		if pid, err := os.ReadFile(childPID); err == nil {
+			if n, err := strconv.Atoi(strings.TrimSpace(string(pid))); err == nil {
+				_ = syscall.Kill(n, syscall.SIGKILL)
+			}
+		}
+	})
 	client := &ExternalClient{BinaryPath: binary, BaseArgs: []string{"user@host"}}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
 		for {
-			if data, err := os.ReadFile(pidFile); err == nil && strings.HasSuffix(string(data), "\n") {
+			// Wait for the child's PID so cleanup can always find it.
+			if data, err := os.ReadFile(childPID); err == nil && strings.HasSuffix(string(data), "\n") {
 				cancel()
 				return
 			}

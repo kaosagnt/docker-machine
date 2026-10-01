@@ -329,7 +329,7 @@ func waitForSSHWithin(d Driver, timeout time.Duration, params sshReadinessParams
 		lastErr error
 	)
 
-	for probes < params.maxAttempts {
+	for probes < params.maxAttempts && ctx.Err() == nil {
 		probes++
 		lastErr = probeSSH(ctx, d, params.clientFactory)
 		if lastErr == nil {
@@ -369,6 +369,9 @@ func waitForSSHWithin(d Driver, timeout time.Duration, params sshReadinessParams
 		"ssh_probes": probes,
 	}).Warnf("No successful SSH probe within %s; giving up", timeout)
 
+	if lastErr == nil {
+		lastErr = ctx.Err() // the deadline passed before the first probe
+	}
 	return fmt.Errorf("%w: no successful SSH probe within %s (%d probes in %s). Last error: %v",
 		ErrSSHReadinessTimeout, timeout, probes, elapsed.Round(time.Millisecond), lastErr)
 }
