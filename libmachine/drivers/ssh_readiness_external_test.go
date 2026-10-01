@@ -72,3 +72,33 @@ func TestWaitForSSHDeadlineKillsSSHProcess(t *testing.T) {
 		t.Fatalf("ssh process %d is still running", pid)
 	}
 }
+
+// TestWaitForSSHWithoutDeadlineUsesLegacyLoop pins the default: with the
+// variable unset, empty or invalid, WaitForSSH takes the legacy loop and a
+// reachable host succeeds. A dispatch that always used the deadline path
+// would get a zero timeout and fail every create.
+//
+// Not parallel: uses t.Setenv.
+func TestWaitForSSHWithoutDeadlineUsesLegacyLoop(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, value := range []string{"", "0", "soon"} {
+		t.Run("value="+value, func(t *testing.T) {
+			t.Setenv("DOCKER_MACHINE_SSH_READINESS_TIMEOUT", value)
+			if value == "" {
+				if err := os.Unsetenv("DOCKER_MACHINE_SSH_READINESS_TIMEOUT"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			d := &sshTarget{Driver: &fakedriver.Driver{BaseDriver: &drivers.BaseDriver{}}}
+			if err := drivers.WaitForSSH(d); err != nil {
+				t.Fatalf("WaitForSSH() = %v, want nil via the legacy loop", err)
+			}
+		})
+	}
+}
