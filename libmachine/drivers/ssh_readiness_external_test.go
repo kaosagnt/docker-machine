@@ -41,6 +41,7 @@ func TestWaitForSSHDeadlineKillsSSHProcess(t *testing.T) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	// Long enough for the fake ssh to start even on a loaded machine; it
 	// then blocks for 60s, so only cancellation ends it within the test.
+	drivers.SetMinSSHReadinessTimeout(t, time.Second)
 	t.Setenv("DOCKER_MACHINE_SSH_READINESS_TIMEOUT", "5s")
 
 	d := &sshTarget{Driver: &fakedriver.Driver{BaseDriver: &drivers.BaseDriver{}}}
@@ -74,8 +75,8 @@ func TestWaitForSSHDeadlineKillsSSHProcess(t *testing.T) {
 }
 
 // TestWaitForSSHWithoutDeadlineUsesLegacyLoop pins the default: with the
-// variable unset, empty or invalid, WaitForSSH takes the legacy loop and a
-// reachable host succeeds. A dispatch that always used the deadline path
+// variable unset, empty, invalid or below the floor, WaitForSSH takes the
+// legacy loop and a reachable host succeeds. A dispatch that always used the deadline path
 // would get a zero timeout and fail every create.
 //
 // Not parallel: uses t.Setenv.
@@ -86,7 +87,7 @@ func TestWaitForSSHWithoutDeadlineUsesLegacyLoop(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	for _, value := range []string{"", "0", "soon"} {
+	for _, value := range []string{"", "0", "soon", "5ms", "59s"} {
 		t.Run("value="+value, func(t *testing.T) {
 			t.Setenv("DOCKER_MACHINE_SSH_READINESS_TIMEOUT", value)
 			if value == "" {

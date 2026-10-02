@@ -231,14 +231,17 @@ func TestSSHReadinessTimeout(t *testing.T) {
 		want    time.Duration
 		enabled bool
 	}{
-		"unset keeps the legacy loop":        {unset: true},
-		"empty keeps the legacy loop":        {value: ""},
-		"seconds":                            {value: "90s", want: 90 * time.Second, enabled: true},
-		"minutes":                            {value: "2m", want: 2 * time.Minute, enabled: true},
-		"zero is ignored":                    {value: "0"},
-		"negative is ignored":                {value: "-30s"},
-		"a bare number is ignored (no unit)": {value: "90"},
-		"garbage is ignored":                 {value: "soon"},
+		"unset keeps the legacy loop":         {unset: true},
+		"empty keeps the legacy loop":         {value: ""},
+		"seconds":                             {value: "90s", want: 90 * time.Second, enabled: true},
+		"minutes":                             {value: "2m", want: 2 * time.Minute, enabled: true},
+		"exactly the floor":                   {value: "1m", want: time.Minute, enabled: true},
+		"just below the floor is ignored":     {value: "59s", enabled: false},
+		"milliseconds for minutes is ignored": {value: "5ms", enabled: false},
+		"zero is ignored":                     {value: "0"},
+		"negative is ignored":                 {value: "-30s"},
+		"a bare number is ignored (no unit)":  {value: "90"},
+		"garbage is ignored":                  {value: "soon"},
 	}
 
 	for name, tt := range tests {

@@ -252,9 +252,16 @@ func sshAvailableFunc(d Driver) func() bool {
 }
 
 // sshReadinessTimeoutEnv opts WaitForSSH into an overall deadline. Its value
-// is a Go duration such as "90s" or "2m". Unset keeps the legacy behavior; a
-// value that is not a positive duration is ignored with a warning.
+// is a Go duration such as "5m". Unset keeps the legacy behavior; a value that
+// is not a duration of at least minSSHReadinessTimeout is ignored with a
+// warning.
 const sshReadinessTimeoutEnv = "DOCKER_MACHINE_SSH_READINESS_TIMEOUT"
+
+// minSSHReadinessTimeout is the shortest deadline WaitForSSH accepts. A value
+// below it, such as "5ms" typed for "5m", would fail every create; falling
+// back to the legacy loop keeps machines coming up instead. A variable so
+// tests can use short deadlines.
+var minSSHReadinessTimeout = time.Minute
 
 // ErrSSHReadinessTimeout is returned by WaitForSSH when the readiness deadline
 // passes before an SSH probe succeeds. Drivers that call WaitForSSH from their
@@ -290,9 +297,9 @@ func sshReadinessTimeout() (time.Duration, bool) {
 	}
 
 	timeout, err := time.ParseDuration(value)
-	if err != nil || timeout <= 0 {
-		log.Warnf("Ignoring %s=%q: want a positive duration such as 90s; SSH readiness has no overall deadline",
-			sshReadinessTimeoutEnv, value)
+	if err != nil || timeout < minSSHReadinessTimeout {
+		log.Warnf("Ignoring %s=%q: want a duration of at least %s, such as 5m; SSH readiness has no overall deadline",
+			sshReadinessTimeoutEnv, value, minSSHReadinessTimeout)
 		return 0, false
 	}
 
