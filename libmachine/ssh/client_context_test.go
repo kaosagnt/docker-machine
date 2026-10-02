@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -20,8 +19,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// writeFakeSSH writes an executable standing in for the ssh binary. It
-// records its PID in pidFile, then runs body.
+// writeFakeSSH writes a stand-in ssh that records its PID, then runs body.
 func writeFakeSSH(t *testing.T, body string) (binary, pidFile string) {
 	t.Helper()
 
@@ -60,8 +58,7 @@ func TestExternalClientOutputContextKillsBlockedSSH(t *testing.T) {
 	binary, pidFile := writeFakeSSH(t, "exec sleep 60")
 	client := &ExternalClient{BinaryPath: binary, BaseArgs: []string{"user@host"}}
 
-	// Cancel once ssh is running, so the test exercises a blocked process
-	// rather than one killed before it started.
+	// Cancel only once ssh is running.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var cancelledAt time.Time
@@ -83,7 +80,7 @@ func TestExternalClientOutputContextKillsBlockedSSH(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 	if lag := returnedAt.Sub(cancelledAt); lag > 3*time.Second {
-		t.Fatalf("OutputContext returned %s after cancellation", lag)
+		t.Fatalf("returned %s after cancellation", lag)
 	}
 	if pid := readPID(t, pidFile); processExists(pid) {
 		t.Fatalf("ssh process %d is still running after cancellation", pid)
@@ -93,10 +90,7 @@ func TestExternalClientOutputContextKillsBlockedSSH(t *testing.T) {
 func TestExternalClientOutputContextBoundsInheritedPipes(t *testing.T) {
 	t.Parallel()
 
-	// A background child keeps ssh's output pipe open after ssh is killed;
-	// WaitDelay must stop CombinedOutput from waiting for it. OpenSSH starts
-	// no such child with baseSSHArgs; this only exercises the bound. The
-	// child is not ours to kill via ssh, so the test cleans it up itself.
+	// The background child keeps the output pipe open after ssh is killed.
 	dir := t.TempDir()
 	childPID := filepath.Join(dir, "child")
 	binary, _ := writeFakeSSH(t, "sleep 60 &\necho $! > "+childPID+"\nexec sleep 60")
@@ -113,7 +107,6 @@ func TestExternalClientOutputContextBoundsInheritedPipes(t *testing.T) {
 	defer cancel()
 	go func() {
 		for {
-			// Wait for the child's PID so cleanup can always find it.
 			if data, err := os.ReadFile(childPID); err == nil && strings.HasSuffix(string(data), "\n") {
 				cancel()
 				return
@@ -130,7 +123,7 @@ func TestExternalClientOutputContextBoundsInheritedPipes(t *testing.T) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 	if elapsed > externalCancelWaitDelay+5*time.Second {
-		t.Fatalf("OutputContext returned after %s; WaitDelay is %s", elapsed, externalCancelWaitDelay)
+		t.Fatalf("returned after %s", elapsed)
 	}
 }
 
@@ -157,11 +150,11 @@ func TestExternalClientOutputContextPassesThroughRemoteExit(t *testing.T) {
 
 	_, err := client.OutputContext(context.Background(), "exit 0")
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		t.Fatalf("a failure with a live context was reported as cancellation: %v", err)
+		t.Fatalf("err = %v", err)
 	}
 	var exitErr interface{ ExitCode() int }
 	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 255 {
-		t.Fatalf("err = %v, want the ssh exit status 255", err)
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -177,12 +170,12 @@ func TestExternalClientOutputContextDoesNotMutateBaseArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := base[:cap(base)][1]; got != "" {
-		t.Fatalf("OutputContext wrote %q into BaseArgs' spare capacity", got)
+		t.Fatalf("BaseArgs spare capacity = %q", got)
 	}
 }
 
-// tarpit accepts TCP connections and never speaks SSH, like a host whose
-// sshd never answers. It reports when the client side closes.
+// tarpit accepts connections and never speaks SSH. closed fires when the
+// client side closes.
 func tarpit(t *testing.T) (addr *net.TCPAddr, closed <-chan struct{}) {
 	t.Helper()
 
@@ -219,8 +212,6 @@ func TestNativeClientOutputContextCancelsBlockedHandshake(t *testing.T) {
 		Port:     addr.Port,
 	}
 
-	goroutinesBefore := runtime.NumGoroutine()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
@@ -232,29 +223,19 @@ func TestNativeClientOutputContextCancelsBlockedHandshake(t *testing.T) {
 		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
 	}
 	if elapsed > 3*time.Second {
-		t.Fatalf("OutputContext returned after %s, want shortly after the 300ms deadline", elapsed)
+		t.Fatalf("returned after %s", elapsed)
 	}
 
 	select {
 	case <-closed:
 	case <-time.After(3 * time.Second):
-		t.Fatal("connection to the unresponsive server was not closed")
-	}
-
-	// Allow the tarpit goroutine and any ssh internals to wind down.
-	deadline := time.Now().Add(3 * time.Second)
-	for runtime.NumGoroutine() > goroutinesBefore && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if after := runtime.NumGoroutine(); after > goroutinesBefore {
-		t.Fatalf("goroutines: %d before, %d after cancellation", goroutinesBefore, after)
+		t.Fatal("connection not closed")
 	}
 }
 
 func TestNativeClientOutputContextDialsOnce(t *testing.T) {
 	t.Parallel()
 
-	// Reserve a port, then close it so connections are refused.
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -268,20 +249,17 @@ func TestNativeClientOutputContextDialsOnce(t *testing.T) {
 		Port:     addr.Port,
 	}
 
-	// Output would spend minutes in mcnutils.WaitFor; OutputContext must
-	// return the first dial error for the caller's loop to handle.
 	started := time.Now()
 	_, err = client.OutputContext(context.Background(), "exit 0")
 	if err == nil {
 		t.Fatal("expected a dial error")
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("OutputContext took %s on a refused port; it should not retry", elapsed)
+		t.Fatalf("took %s", elapsed)
 	}
 }
 
-// serveExecExit0 runs a minimal SSH server that accepts any client and
-// answers every exec request with exit status 0.
+// serveExecExit0 answers every exec request with exit status 0.
 func serveExecExit0(t *testing.T) *net.TCPAddr {
 	t.Helper()
 

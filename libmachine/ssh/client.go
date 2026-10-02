@@ -37,12 +37,8 @@ type Client interface {
 	Wait() error
 }
 
-// ContextClient is implemented by clients that can abandon an in-flight
-// command when ctx ends: the external client kills its ssh process and the
-// native client closes its connection. The SSH readiness probe uses it so a
-// readiness deadline stops a blocked probe instead of only skipping the next
-// one. It is separate from Client so other Client implementations still
-// compile.
+// ContextClient is separate from Client so other Client implementations
+// still compile.
 type ContextClient interface {
 	OutputContext(ctx context.Context, command string) (string, error)
 }
@@ -77,9 +73,7 @@ type ClientType string
 const (
 	maxDialAttempts = 10
 
-	// externalCancelWaitDelay bounds how long OutputContext waits for the
-	// output pipes to close after killing ssh, in case something else
-	// inherited them.
+	// In case something other than ssh holds its output pipes.
 	externalCancelWaitDelay = 5 * time.Second
 )
 
@@ -220,9 +214,7 @@ func (client *NativeClient) Output(command string) (string, error) {
 	return string(output), err
 }
 
-// OutputContext runs command over a single dial. Unlike Output it does not
-// retry the dial (the caller's loop does), and closing the connection when
-// ctx ends unblocks the dial, handshake and session.
+// OutputContext dials once, unlike Output; the caller retries.
 func (client *NativeClient) OutputContext(ctx context.Context, command string) (string, error) {
 	addr := net.JoinHostPort(client.Hostname, strconv.Itoa(client.Port))
 
@@ -231,8 +223,6 @@ func (client *NativeClient) OutputContext(ctx context.Context, command string) (
 	if err != nil {
 		return "", contextErr(ctx, err)
 	}
-	// sshClient.Close also closes conn; this covers the paths before it
-	// exists, and ignores the second close.
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
@@ -448,9 +438,8 @@ func (client *ExternalClient) Output(command string) (string, error) {
 	return string(output), err
 }
 
-// OutputContext is Output, except that ssh is killed when ctx ends.
 func (client *ExternalClient) OutputContext(ctx context.Context, command string) (string, error) {
-	// Copy rather than append to BaseArgs, which may share its backing array.
+	// Appending to BaseArgs could write into its spare capacity.
 	args := make([]string, 0, len(client.BaseArgs)+1)
 	args = append(append(args, client.BaseArgs...), command)
 
@@ -510,8 +499,7 @@ func (client *ExternalClient) Wait() error {
 	return err
 }
 
-// contextErr reports a failure caused by ctx ending as ctx's error, so callers
-// can tell a deadline from a transport failure with errors.Is.
+// contextErr lets callers tell a deadline from a transport failure.
 func contextErr(ctx context.Context, err error) error {
 	if err == nil || ctx.Err() == nil {
 		return err

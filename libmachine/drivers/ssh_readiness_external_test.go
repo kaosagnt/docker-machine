@@ -16,7 +16,6 @@ import (
 	"github.com/docker/machine/libmachine/drivers"
 )
 
-// sshTarget is a fake driver with an SSH address.
 type sshTarget struct {
 	*fakedriver.Driver
 }
@@ -25,11 +24,6 @@ func (d *sshTarget) GetSSHHostname() (string, error) { return "192.0.2.1", nil }
 func (d *sshTarget) GetSSHPort() (int, error)        { return 22, nil }
 func (d *sshTarget) GetSSHUsername() string          { return "docker" }
 
-// TestWaitForSSHDeadlineKillsSSHProcess runs WaitForSSH through the
-// environment variable, the real client factory and the external client,
-// with an ssh on PATH that never returns, and checks that every ssh process
-// it started is gone afterwards.
-//
 // Not parallel: uses t.Setenv.
 func TestWaitForSSHDeadlineKillsSSHProcess(t *testing.T) {
 	dir := t.TempDir()
@@ -39,8 +33,6 @@ func TestWaitForSSHDeadlineKillsSSHProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	// Long enough for the fake ssh to start even on a loaded machine; it
-	// then blocks for 60s, so only cancellation ends it within the test.
 	drivers.SetMinSSHReadinessTimeout(t, time.Second)
 	t.Setenv("DOCKER_MACHINE_SSH_READINESS_TIMEOUT", "5s")
 
@@ -51,19 +43,19 @@ func TestWaitForSSHDeadlineKillsSSHProcess(t *testing.T) {
 	elapsed := time.Since(started)
 
 	if !errors.Is(err, drivers.ErrSSHReadinessTimeout) {
-		t.Fatalf("err = %v, want ErrSSHReadinessTimeout", err)
+		t.Fatalf("err = %v", err)
 	}
 	if elapsed > 10*time.Second {
-		t.Fatalf("WaitForSSH returned after %s with a 5s deadline", elapsed)
+		t.Fatalf("returned after %s", elapsed)
 	}
 
 	data, err := os.ReadFile(pids)
 	if err != nil {
-		t.Fatalf("the fake ssh never ran: %v", err)
+		t.Fatal(err)
 	}
 	lines := strings.Fields(string(data))
 	if len(lines) != 1 {
-		t.Fatalf("started %d ssh processes, want 1 (the blocked probe)", len(lines))
+		t.Fatalf("ssh processes started = %d, want 1", len(lines))
 	}
 	pid, err := strconv.Atoi(lines[0])
 	if err != nil {
@@ -74,13 +66,8 @@ func TestWaitForSSHDeadlineKillsSSHProcess(t *testing.T) {
 	}
 }
 
-// TestWaitForSSHWithoutDeadlineUsesLegacyLoop pins the default: with the
-// variable unset, empty, invalid or below the floor, WaitForSSH takes the
-// legacy loop and a reachable host succeeds. A dispatch that always used the deadline path
-// would get a zero timeout and fail every create.
-//
 // Not parallel: uses t.Setenv.
-func TestWaitForSSHWithoutDeadlineUsesLegacyLoop(t *testing.T) {
+func TestWaitForSSHWithoutDeadlineSucceeds(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "ssh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -98,7 +85,7 @@ func TestWaitForSSHWithoutDeadlineUsesLegacyLoop(t *testing.T) {
 
 			d := &sshTarget{Driver: &fakedriver.Driver{BaseDriver: &drivers.BaseDriver{}}}
 			if err := drivers.WaitForSSH(d); err != nil {
-				t.Fatalf("WaitForSSH() = %v, want nil via the legacy loop", err)
+				t.Fatal(err)
 			}
 		})
 	}

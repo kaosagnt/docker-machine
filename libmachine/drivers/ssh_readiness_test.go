@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/docker/machine/libmachine/ssh"
 )
 
-// fakeProbeClient is a ContextClient whose OutputContext delegates to probe.
 type fakeProbeClient struct {
 	probe func(ctx context.Context) error
 }
@@ -22,7 +22,7 @@ func (c *fakeProbeClient) OutputContext(ctx context.Context, command string) (st
 	return "", c.probe(ctx)
 }
 func (c *fakeProbeClient) Output(command string) (string, error) {
-	return "", errors.New("Output must not be used when OutputContext is available")
+	return "", errors.New("Output called on a ContextClient")
 }
 func (c *fakeProbeClient) Shell(args ...string) error { return nil }
 func (c *fakeProbeClient) Start(command string) (io.ReadCloser, io.ReadCloser, error) {
@@ -30,7 +30,7 @@ func (c *fakeProbeClient) Start(command string) (io.ReadCloser, io.ReadCloser, e
 }
 func (c *fakeProbeClient) Wait() error { return nil }
 
-func readinessParams(probe func(ctx context.Context) error, maxAttempts int, interval time.Duration) (sshReadinessParams, *atomic.Int32) {
+func readinessParams(probe func(ctx context.Context) error, b func() backoff.BackOff) (sshReadinessParams, *atomic.Int32) {
 	var calls atomic.Int32
 	client := &fakeProbeClient{probe: func(ctx context.Context) error {
 		calls.Add(1)
@@ -38,98 +38,103 @@ func readinessParams(probe func(ctx context.Context) error, maxAttempts int, int
 	}}
 	return sshReadinessParams{
 		clientFactory: func(Driver) (ssh.Client, error) { return client, nil },
-		maxAttempts:   maxAttempts,
-		interval:      interval,
+		backOff:       b,
 	}, &calls
 }
 
-func TestWaitForSSHWithinCancelsBlockedProbe(t *testing.T) {
+func noWait() backoff.BackOff { return &backoff.ZeroBackOff{} }
+
+func withDeadline(t *testing.T, d time.Duration) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+func TestWaitForSSHCancelsBlockedProbe(t *testing.T) {
 	t.Parallel()
 
-	var probeSawCancel atomic.Bool
+	var sawCancel atomic.Bool
 	params, calls := readinessParams(func(ctx context.Context) error {
-		<-ctx.Done() // an unreachable host: the probe blocks until cancelled
-		probeSawCancel.Store(true)
+		<-ctx.Done()
+		sawCancel.Store(true)
 		return ctx.Err()
-	}, 60, 0)
+	}, noWait)
 
 	started := time.Now()
-	err := waitForSSHWithin(nil, 200*time.Millisecond, params)
+	err := waitForSSH(withDeadline(t, 200*time.Millisecond), nil, 200*time.Millisecond, params)
 	elapsed := time.Since(started)
 
 	if !errors.Is(err, ErrSSHReadinessTimeout) {
-		t.Fatalf("err = %v, want ErrSSHReadinessTimeout", err)
+		t.Fatalf("err = %v", err)
 	}
-	if !probeSawCancel.Load() {
-		t.Fatal("the in-flight probe was not cancelled")
+	if !sawCancel.Load() {
+		t.Fatal("probe was not cancelled")
 	}
 	if got := calls.Load(); got != 1 {
-		t.Fatalf("probes = %d, want 1: no probe may start after the deadline", got)
+		t.Fatalf("probes = %d, want 1", got)
 	}
-	if elapsed < 200*time.Millisecond || elapsed > 2*time.Second {
-		t.Fatalf("returned after %s, want shortly after the 200ms deadline", elapsed)
+	if elapsed > 2*time.Second {
+		t.Fatalf("returned after %s", elapsed)
 	}
 	for _, want := range []string{"within 200ms", "1 probes", "context deadline exceeded"} {
 		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %q", err, want)
+			t.Errorf("error %q does not contain %q", err, want)
 		}
 	}
 }
 
-func TestWaitForSSHWithinExpiredDeadlineStartsNoProbe(t *testing.T) {
+func TestWaitForSSHExpiredDeadlineStartsNoProbe(t *testing.T) {
 	t.Parallel()
 
-	// A non-positive timeout yields an already-expired context.
 	var factoryCalls atomic.Int32
 	params := sshReadinessParams{
 		clientFactory: func(Driver) (ssh.Client, error) {
 			factoryCalls.Add(1)
-			return nil, errors.New("must not be called")
+			return nil, errors.New("unexpected")
 		},
-		maxAttempts: 60,
+		backOff: noWait,
 	}
 
-	err := waitForSSHWithin(nil, 0, params)
+	err := waitForSSH(withDeadline(t, 0), nil, 0, params)
 
 	if !errors.Is(err, ErrSSHReadinessTimeout) {
-		t.Fatalf("err = %v, want ErrSSHReadinessTimeout", err)
+		t.Fatalf("err = %v", err)
 	}
 	if got := factoryCalls.Load(); got != 0 {
-		t.Fatalf("client factory called %d times after the deadline", got)
+		t.Fatalf("factory calls = %d, want 0", got)
 	}
 	if !strings.Contains(err.Error(), "0 probes") || !strings.Contains(err.Error(), "context deadline exceeded") {
-		t.Errorf("error %q should report 0 probes and the deadline", err)
+		t.Errorf("error = %q", err)
 	}
 }
 
-func TestWaitForSSHWithinDeadlineDuringBackoff(t *testing.T) {
+func TestWaitForSSHDeadlineDuringBackoff(t *testing.T) {
 	t.Parallel()
 
 	params, calls := readinessParams(func(ctx context.Context) error {
 		return errors.New("connection refused")
-	}, 60, time.Hour)
+	}, func() backoff.BackOff { return backoff.NewConstantBackOff(time.Hour) })
 
 	started := time.Now()
-	err := waitForSSHWithin(nil, 200*time.Millisecond, params)
+	err := waitForSSH(withDeadline(t, 200*time.Millisecond), nil, 200*time.Millisecond, params)
 
 	if !errors.Is(err, ErrSSHReadinessTimeout) {
-		t.Fatalf("err = %v, want ErrSSHReadinessTimeout", err)
+		t.Fatalf("err = %v", err)
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
-		t.Fatalf("returned after %s; the deadline must interrupt the wait between probes", elapsed)
+		t.Fatalf("returned after %s", elapsed)
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("probes = %d, want 1", got)
 	}
 	if !strings.Contains(err.Error(), "connection refused") {
-		t.Errorf("error %q does not carry the last probe error", err)
+		t.Errorf("error = %q", err)
 	}
 }
 
-func TestWaitForSSHWithinSlowHealthyHostSucceeds(t *testing.T) {
+func TestWaitForSSHSlowHealthyHostSucceeds(t *testing.T) {
 	t.Parallel()
 
-	// sshd comes up after four refused probes, well inside the budget.
 	var failuresLeft atomic.Int32
 	failuresLeft.Store(4)
 	params, calls := readinessParams(func(ctx context.Context) error {
@@ -137,93 +142,115 @@ func TestWaitForSSHWithinSlowHealthyHostSucceeds(t *testing.T) {
 			return errors.New("connection refused")
 		}
 		return nil
-	}, 60, 10*time.Millisecond)
+	}, noWait)
 
-	if err := waitForSSHWithin(nil, 5*time.Second, params); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := waitForSSH(withDeadline(t, 5*time.Second), nil, 5*time.Second, params); err != nil {
+		t.Fatal(err)
 	}
 	if got := calls.Load(); got != 5 {
 		t.Fatalf("probes = %d, want 5", got)
 	}
 }
 
-func TestWaitForSSHWithinKeepsAttemptCap(t *testing.T) {
+func TestWaitForSSHKeepsAttemptCap(t *testing.T) {
 	t.Parallel()
 
 	params, calls := readinessParams(func(ctx context.Context) error {
 		return errors.New("connection refused")
-	}, 3, 0)
+	}, func() backoff.BackOff { return backoff.WithMaxRetries(&backoff.ZeroBackOff{}, 2) })
 
-	err := waitForSSHWithin(nil, time.Hour, params)
+	err := waitForSSH(context.Background(), nil, 0, params)
 
 	if err == nil || errors.Is(err, ErrSSHReadinessTimeout) {
-		t.Fatalf("err = %v, want the legacy too-many-retries error", err)
+		t.Fatalf("err = %v", err)
 	}
 	if !strings.Contains(err.Error(), "Too many retries waiting for SSH to be available") {
-		t.Errorf("error %q does not use the legacy message", err)
+		t.Errorf("error = %q", err)
 	}
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("probes = %d, want 3", got)
 	}
 }
 
-func TestWaitForSSHWithinRetriesClientFactoryErrors(t *testing.T) {
+func TestWaitForSSHRetriesClientFactoryErrors(t *testing.T) {
 	t.Parallel()
 
-	// The legacy loop treats a client construction error as a failed probe,
-	// so the deadline path does too.
 	var calls atomic.Int32
 	params := sshReadinessParams{
 		clientFactory: func(Driver) (ssh.Client, error) {
 			calls.Add(1)
 			return nil, errors.New("no address yet")
 		},
-		maxAttempts: 3,
+		backOff: func() backoff.BackOff { return backoff.WithMaxRetries(&backoff.ZeroBackOff{}, 2) },
 	}
 
-	err := waitForSSHWithin(nil, time.Hour, params)
+	err := waitForSSH(context.Background(), nil, 0, params)
 	if err == nil || !strings.Contains(err.Error(), "no address yet") {
-		t.Fatalf("err = %v, want the factory error", err)
+		t.Fatalf("err = %v", err)
 	}
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("factory calls = %d, want 3", got)
 	}
 }
 
-func TestWaitForSSHWithinFallsBackToOutput(t *testing.T) {
+func TestWaitForSSHFallsBackToOutput(t *testing.T) {
 	t.Parallel()
 
-	// A client without OutputContext still works, uncancellably.
 	client := &fakeSeqClient{queue: []cmdResult{
 		{err: errors.New("refused")},
 		{out: ""},
 	}}
 	params := sshReadinessParams{
 		clientFactory: func(Driver) (ssh.Client, error) { return client, nil },
-		maxAttempts:   60,
+		backOff:       noWait,
 	}
 
-	if err := waitForSSHWithin(nil, 5*time.Second, params); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err := waitForSSH(withDeadline(t, 5*time.Second), nil, 5*time.Second, params); err != nil {
+		t.Fatal(err)
 	}
 	if client.calls != 2 {
 		t.Fatalf("Output calls = %d, want 2", client.calls)
 	}
 }
 
-func TestDefaultSSHReadinessParamsMatchLegacyLoop(t *testing.T) {
+func TestSSHReadinessBackOffMatchesOldSchedule(t *testing.T) {
 	t.Parallel()
 
-	p := defaultSSHReadinessParams()
-	if p.maxAttempts != 60 || p.interval != 3*time.Second || p.jitter != 9*time.Second {
-		t.Fatalf("params = %+v, want mcnutils.WaitFor's 60 attempts, 3s interval, 9s jitter", p)
+	b := sshReadinessBackOff()
+	waits := 0
+	for {
+		next := b.NextBackOff()
+		if next == backoff.Stop {
+			break
+		}
+		waits++
+		if next < 3*time.Second || next > 12*time.Second {
+			t.Fatalf("wait %d = %s, want 3s to 12s", waits, next)
+		}
 	}
-	if p.clientFactory == nil {
-		t.Fatal("clientFactory is nil")
+	if waits != 59 {
+		t.Fatalf("waits = %d, want 59 (60 probes)", waits)
 	}
 }
 
-// Not parallel: uses t.Setenv.
+type fakeClock struct{ now time.Time }
+
+func (c *fakeClock) Now() time.Time { return c.now }
+
+func TestSSHProbeIntervalHasNoElapsedLimit(t *testing.T) {
+	t.Parallel()
+
+	clock := &fakeClock{now: time.Unix(0, 0)}
+	b := sshProbeInterval()
+	b.Clock = clock
+	b.Reset()
+	clock.now = clock.now.Add(time.Hour)
+
+	if next := b.NextBackOff(); next == backoff.Stop {
+		t.Fatal("backoff stopped after an hour")
+	}
+}
+
 func TestSSHReadinessTimeout(t *testing.T) {
 	tests := map[string]struct {
 		value   string
@@ -231,8 +258,8 @@ func TestSSHReadinessTimeout(t *testing.T) {
 		want    time.Duration
 		enabled bool
 	}{
-		"unset keeps the legacy loop":         {unset: true},
-		"empty keeps the legacy loop":         {value: ""},
+		"unset":                               {unset: true},
+		"empty":                               {value: ""},
 		"seconds":                             {value: "90s", want: 90 * time.Second, enabled: true},
 		"minutes":                             {value: "2m", want: 2 * time.Minute, enabled: true},
 		"exactly the floor":                   {value: "1m", want: time.Minute, enabled: true},

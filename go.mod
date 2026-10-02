@@ -10,6 +10,7 @@ require (
 	github.com/aws/aws-sdk-go v1.55.7
 	github.com/bugsnag/bugsnag-go v1.0.6-0.20151120182711-02e952891c52
 	github.com/cenkalti/backoff v0.0.0-20141124221459-9831e1e25c87
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/codegangsta/cli v1.11.1-0.20151120215642-0302d3914d2a
 	github.com/digitalocean/godo v1.0.1-0.20170317202744-d59ed2fe842b
 	github.com/docker/docker v28.5.2+incompatible

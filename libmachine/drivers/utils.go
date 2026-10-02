@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	math_rand "math/rand"
 	"os"
 	"os/exec"
 	"strconv"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/docker/machine/libmachine/log"
-	"github.com/docker/machine/libmachine/mcnutils"
 	"github.com/docker/machine/libmachine/ssh"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -144,8 +143,7 @@ func isSSHTransportError(err error) bool {
 // RunSSHCommandFromDriver runs command on the host exactly once. Use this for
 // commands that are NOT safe to re-run on a transient transport failure — most
 // importantly commands whose success severs the SSH session (e.g.
-// `sudo shutdown -r now`, which exits 255 because the box reboots), and the
-// WaitForSSH reachability probe (the caller's own loop provides retry there).
+// `sudo shutdown -r now`, which exits 255 because the box reboots).
 func RunSSHCommandFromDriver(d Driver, command string) (string, error) {
 	return runSSHCommandFromDriver(d, command, defaultSSHRunParams(1))
 }
@@ -238,58 +236,46 @@ err     : %v
 output  : %s`, command, err, output)
 }
 
-func sshAvailableFunc(d Driver) func() bool {
-	return func() bool {
-		log.Debug("Getting to WaitForSSH function...")
-		// Single-shot: mcnutils.WaitFor already retries this probe many times,
-		// so an inner retry here would nest two retry loops.
-		if _, err := RunSSHCommandFromDriver(d, "exit 0"); err != nil {
-			log.Debugf("Error getting ssh command 'exit 0' : %s", err)
-			return false
-		}
-		return true
-	}
-}
-
-// sshReadinessTimeoutEnv opts WaitForSSH into an overall deadline. Its value
-// is a Go duration such as "5m". Unset keeps the legacy behavior; a value that
-// is not a duration of at least minSSHReadinessTimeout is ignored with a
-// warning.
+// DOCKER_MACHINE_SSH_READINESS_TIMEOUT bounds WaitForSSH. Unset, it waits as
+// long as it always has, about 40 minutes for a host that never answers.
 const sshReadinessTimeoutEnv = "DOCKER_MACHINE_SSH_READINESS_TIMEOUT"
 
-// minSSHReadinessTimeout is the shortest deadline WaitForSSH accepts. A value
-// below it, such as "5ms" typed for "5m", would fail every create; falling
-// back to the legacy loop keeps machines coming up instead. A variable so
-// tests can use short deadlines.
+// A shorter deadline, such as 5ms typed for 5m, would fail every create.
 var minSSHReadinessTimeout = time.Minute
 
-// ErrSSHReadinessTimeout is returned by WaitForSSH when the readiness deadline
-// passes before an SSH probe succeeds. Drivers that call WaitForSSH from their
-// plugin process return it over RPC as text, so errors.Is only works
-// in-process.
+// Drivers that call WaitForSSH in their plugin process return this over RPC
+// as text, so errors.Is only matches in-process.
 var ErrSSHReadinessTimeout = errors.New("SSH readiness deadline exceeded")
 
-// sshReadinessParams are the knobs of the deadline-bounded readiness loop.
-// The defaults match mcnutils.WaitFor so that only the deadline differs from
-// the legacy loop.
 type sshReadinessParams struct {
 	clientFactory func(Driver) (ssh.Client, error)
-	maxAttempts   int
-	interval      time.Duration
-	jitter        time.Duration
+	backOff       func() backoff.BackOff
 }
 
 func defaultSSHReadinessParams() sshReadinessParams {
 	return sshReadinessParams{
 		clientFactory: GetSSHClientFromDriver,
-		maxAttempts:   60,
-		interval:      3 * time.Second,
-		jitter:        9 * time.Second,
+		backOff:       sshReadinessBackOff,
 	}
 }
 
-// sshReadinessTimeout returns the configured readiness deadline, or false
-// when none is in effect.
+// sshReadinessBackOff keeps the old mcnutils.WaitFor schedule: 60 probes,
+// 3 to 12 seconds apart.
+func sshReadinessBackOff() backoff.BackOff {
+	return backoff.WithMaxRetries(sshProbeInterval(), 59)
+}
+
+func sshProbeInterval() *backoff.ExponentialBackOff {
+	b := backoff.NewExponentialBackOff()
+	b.InitialInterval = 7500 * time.Millisecond
+	b.RandomizationFactor = 0.6
+	b.Multiplier = 1
+	// The default of 15 minutes would cap the wait when no deadline is set.
+	b.MaxElapsedTime = 0
+	b.Reset()
+	return b
+}
+
 func sshReadinessTimeout() (time.Duration, bool) {
 	value, set := os.LookupEnv(sshReadinessTimeoutEnv)
 	if !set || value == "" {
@@ -307,67 +293,45 @@ func sshReadinessTimeout() (time.Duration, bool) {
 }
 
 func WaitForSSH(d Driver) error {
-	if timeout, ok := sshReadinessTimeout(); ok {
-		return waitForSSHWithin(d, timeout, defaultSSHReadinessParams())
+	ctx := context.Background()
+	timeout, ok := sshReadinessTimeout()
+	if ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 
-	// mcnutils.WaitFor retries the reachability probe up to 60 times with a
-	// 3s (+0-9s jitter) interval. Each external ssh probe can itself take up
-	// to 30s (ConnectionAttempts=3, ConnectTimeout=10), so an unreachable
-	// host holds this for roughly 40 minutes.
-	if err := mcnutils.WaitFor(sshAvailableFunc(d)); err != nil {
-		return fmt.Errorf("Too many retries waiting for SSH to be available.  Last error: %s", err)
-	}
-	return nil
+	return waitForSSH(ctx, d, timeout, defaultSSHReadinessParams())
 }
 
-// waitForSSHWithin probes like the legacy loop, but stops at timeout: the
-// in-flight probe is cancelled (its ssh process killed, or its connection
-// closed) and no further probe starts. A probe that succeeds as the deadline
-// passes still counts: the host answered, so there is nothing to gain by
-// discarding it.
-func waitForSSHWithin(d Driver, timeout time.Duration, params sshReadinessParams) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
+func waitForSSH(ctx context.Context, d Driver, timeout time.Duration, params sshReadinessParams) error {
 	started := time.Now()
 	var (
 		probes  int
 		lastErr error
 	)
 
-	for probes < params.maxAttempts && ctx.Err() == nil {
-		probes++
-		lastErr = probeSSH(ctx, d, params.clientFactory)
-		if lastErr == nil {
+	// backoff.Retry runs the first probe before it looks at ctx.
+	if ctx.Err() == nil {
+		err := backoff.Retry(func() error {
+			probes++
+			output, err := probeSSH(ctx, d, params.clientFactory)
+			if err != nil {
+				log.Debugf("SSH readiness probe %d failed: %v: %s", probes, err, output)
+				lastErr = err
+			}
+			return err
+		}, backoff.WithContext(params.backOff(), ctx))
+		if err == nil {
 			return nil
-		}
-		log.Debugf("SSH readiness probe %d failed: %s", probes, lastErr)
-
-		if ctx.Err() != nil || probes == params.maxAttempts {
-			break
-		}
-
-		wait := params.interval
-		if params.jitter > 0 {
-			wait += time.Duration(math_rand.Int63n(int64(params.jitter)))
-		}
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-		case <-timer.C:
-		}
-		timer.Stop()
-		if ctx.Err() != nil {
-			break
 		}
 	}
 
-	elapsed := time.Since(started)
 	if ctx.Err() == nil {
 		return fmt.Errorf("Too many retries waiting for SSH to be available.  Last error: %s", lastErr)
 	}
 
+	elapsed := time.Since(started)
 	log.WithFields(log.Fields{
 		"phase":      "wait_ssh",
 		"reason":     "ssh_readiness_timeout",
@@ -377,25 +341,21 @@ func waitForSSHWithin(d Driver, timeout time.Duration, params sshReadinessParams
 	}).Warnf("No successful SSH probe within %s; giving up", timeout)
 
 	if lastErr == nil {
-		lastErr = ctx.Err() // the deadline passed before the first probe
+		lastErr = ctx.Err()
 	}
 	return fmt.Errorf("%w: no successful SSH probe within %s (%d probes in %s). Last error: %v",
 		ErrSSHReadinessTimeout, timeout, probes, elapsed.Round(time.Millisecond), lastErr)
 }
 
-// probeSSH runs one "exit 0" against the host, abandoning it when ctx ends if
-// the client supports that. Both in-tree clients do.
-func probeSSH(ctx context.Context, d Driver, factory func(Driver) (ssh.Client, error)) error {
+// probeSSH runs "exit 0" once; the caller retries.
+func probeSSH(ctx context.Context, d Driver, factory func(Driver) (ssh.Client, error)) (string, error) {
 	client, err := factory(d)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if cc, ok := client.(ssh.ContextClient); ok {
-		_, err = cc.OutputContext(ctx, "exit 0")
-		return err
+		return cc.OutputContext(ctx, "exit 0")
 	}
-
-	_, err = client.Output("exit 0")
-	return err
+	return client.Output("exit 0")
 }
