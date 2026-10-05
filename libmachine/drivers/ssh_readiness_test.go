@@ -22,11 +22,8 @@ type fakeProbeClient struct {
 	probe func(ctx context.Context) error
 }
 
-func (c *fakeProbeClient) OutputContext(ctx context.Context, command string) (string, error) {
+func (c *fakeProbeClient) Output(ctx context.Context, command string) (string, error) {
 	return "", c.probe(ctx)
-}
-func (c *fakeProbeClient) Output(command string) (string, error) {
-	return "", errors.New("Output called on a ContextClient")
 }
 func (c *fakeProbeClient) Shell(args ...string) error { return nil }
 func (c *fakeProbeClient) Start(command string) (io.ReadCloser, io.ReadCloser, error) {
@@ -197,26 +194,6 @@ func TestWaitForSSHRetriesClientFactoryErrors(t *testing.T) {
 	}
 }
 
-func TestWaitForSSHFallsBackToOutput(t *testing.T) {
-	t.Parallel()
-
-	client := &fakeSeqClient{queue: []cmdResult{
-		{err: errors.New("refused")},
-		{out: ""},
-	}}
-	params := sshReadinessParams{
-		clientFactory: func(Driver) (ssh.Client, error) { return client, nil },
-		backOff:       noWait,
-	}
-
-	if err := waitForSSH(withDeadline(t, 5*time.Second), nil, 5*time.Second, params); err != nil {
-		t.Fatal(err)
-	}
-	if client.calls != 2 {
-		t.Fatalf("Output calls = %d, want 2", client.calls)
-	}
-}
-
 // Alerts key on these fields. Not parallel: replaces the package logger.
 func TestWaitForSSHTimeoutLogsReason(t *testing.T) {
 	prev := log.Format()
@@ -298,11 +275,10 @@ func TestSSHReadinessTimeout(t *testing.T) {
 	}{
 		"unset":                               {unset: true},
 		"empty":                               {value: ""},
-		"seconds":                             {value: "600s", want: 10 * time.Minute, enabled: true},
+		"seconds":                             {value: "90s", want: 90 * time.Second, enabled: true},
 		"minutes":                             {value: "10m", want: 10 * time.Minute, enabled: true},
-		"exactly the floor":                   {value: "5m", want: 5 * time.Minute, enabled: true},
-		"just below the floor is ignored":     {value: "4m59s"},
-		"two minutes is ignored":              {value: "2m"},
+		"exactly the floor":                   {value: "1m", want: time.Minute, enabled: true},
+		"just below the floor is ignored":     {value: "59s"},
 		"milliseconds for minutes is ignored": {value: "5ms"},
 		"zero is ignored":                     {value: "0"},
 		"negative is ignored":                 {value: "-30s"},

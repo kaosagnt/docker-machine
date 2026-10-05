@@ -21,7 +21,9 @@ import (
 )
 
 type Client interface {
-	Output(command string) (string, error)
+	// Output runs command and returns its combined output. It stops when ctx
+	// ends.
+	Output(ctx context.Context, command string) (string, error)
 	Shell(args ...string) error
 
 	// Start starts the specified command without waiting for it to finish. You
@@ -36,18 +38,6 @@ type Client interface {
 	// returned error follows the same logic as in the exec.Cmd.Wait function.
 	Wait() error
 }
-
-// ContextClient is separate from Client so other Client implementations
-// still compile.
-type ContextClient interface {
-	OutputContext(ctx context.Context, command string) (string, error)
-}
-
-// NewClient returns only these two types; keep both cancellable.
-var (
-	_ ContextClient = (*ExternalClient)(nil)
-	_ ContextClient = (*NativeClient)(nil)
-)
 
 type ExternalClient struct {
 	BaseArgs   []string
@@ -201,21 +191,8 @@ func (client *NativeClient) session(command string) (*ssh.Client, *ssh.Session, 
 	return conn, session, err
 }
 
-func (client *NativeClient) Output(command string) (string, error) {
-	conn, session, err := client.session(command)
-	if err != nil {
-		return "", err
-	}
-	defer closeConn(conn)
-	defer session.Close()
-
-	output, err := session.CombinedOutput(command)
-
-	return string(output), err
-}
-
-// OutputContext dials once, unlike Output; the caller retries.
-func (client *NativeClient) OutputContext(ctx context.Context, command string) (string, error) {
+// Output dials once; callers retry.
+func (client *NativeClient) Output(ctx context.Context, command string) (string, error) {
 	addr := net.JoinHostPort(client.Hostname, strconv.Itoa(client.Port))
 
 	var dialer net.Dialer
@@ -431,14 +408,7 @@ func getSSHCmd(binaryPath string, args ...string) *exec.Cmd {
 	return exec.Command(binaryPath, args...)
 }
 
-func (client *ExternalClient) Output(command string) (string, error) {
-	args := append(client.BaseArgs, command)
-	cmd := getSSHCmd(client.BinaryPath, args...)
-	output, err := cmd.CombinedOutput()
-	return string(output), err
-}
-
-func (client *ExternalClient) OutputContext(ctx context.Context, command string) (string, error) {
+func (client *ExternalClient) Output(ctx context.Context, command string) (string, error) {
 	// Appending to BaseArgs could write into its spare capacity.
 	args := make([]string, 0, len(client.BaseArgs)+1)
 	args = append(append(args, client.BaseArgs...), command)

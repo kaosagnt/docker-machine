@@ -127,8 +127,8 @@ func isSSHTransportError(err error) bool {
 	}
 
 	// An explicit cancellation or deadline is a caller decision to stop, not a
-	// transient transport blip — never retry past it. ssh.ContextClient
-	// reports one this way.
+	// transient transport blip — never retry past it. ssh.Client.Output
+	// reports one this way when its context ends.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
@@ -213,7 +213,7 @@ func runSSHCommandFromDriver(d Driver, command string, params sshRunParams) (str
 			return "", err
 		}
 
-		output, err = client.Output(command)
+		output, err = client.Output(context.Background(), command)
 		log.Debugf("SSH cmd err, output: %v: %s", err, output)
 		if err == nil {
 			return output, nil
@@ -238,9 +238,8 @@ output  : %s`, command, err, output)
 // long as it always has, about 40 minutes for a host that never answers.
 const sshReadinessTimeoutEnv = "DOCKER_MACHINE_SSH_READINESS_TIMEOUT"
 
-// Below five minutes slow but healthy machines start to time out, and a typo
-// such as 5ms for 5m would fail every create.
-var minSSHReadinessTimeout = 5 * time.Minute
+// A shorter deadline, such as 5ms typed for 5m, would fail every create.
+var minSSHReadinessTimeout = time.Minute
 
 // ErrSSHReadinessTimeout is returned when the deadline passes. Drivers that
 // call WaitForSSH in their plugin process return it over RPC as text, so
@@ -352,9 +351,5 @@ func probeSSH(ctx context.Context, d Driver, factory func(Driver) (ssh.Client, e
 	if err != nil {
 		return "", err
 	}
-
-	if cc, ok := client.(ssh.ContextClient); ok {
-		return cc.OutputContext(ctx, "exit 0")
-	}
-	return client.Output("exit 0")
+	return client.Output(ctx, "exit 0")
 }

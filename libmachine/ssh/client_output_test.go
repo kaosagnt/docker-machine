@@ -51,7 +51,7 @@ func processExists(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
-func TestExternalClientOutputContextKillsBlockedSSH(t *testing.T) {
+func TestExternalClientOutputKillsBlockedSSH(t *testing.T) {
 	t.Parallel()
 
 	// exec replaces the shell, so the PID on file is the blocked process.
@@ -73,7 +73,7 @@ func TestExternalClientOutputContextKillsBlockedSSH(t *testing.T) {
 		}
 	}()
 
-	_, err := client.OutputContext(ctx, "exit 0")
+	_, err := client.Output(ctx, "exit 0")
 	returnedAt := time.Now()
 
 	if !errors.Is(err, context.Canceled) {
@@ -87,7 +87,7 @@ func TestExternalClientOutputContextKillsBlockedSSH(t *testing.T) {
 	}
 }
 
-func TestExternalClientOutputContextBoundsInheritedPipes(t *testing.T) {
+func TestExternalClientOutputBoundsInheritedPipes(t *testing.T) {
 	t.Parallel()
 
 	// The background child keeps the output pipe open after ssh is killed.
@@ -116,7 +116,7 @@ func TestExternalClientOutputContextBoundsInheritedPipes(t *testing.T) {
 	}()
 
 	started := time.Now()
-	_, err := client.OutputContext(ctx, "exit 0")
+	_, err := client.Output(ctx, "exit 0")
 	elapsed := time.Since(started)
 
 	if !errors.Is(err, context.Canceled) {
@@ -127,13 +127,13 @@ func TestExternalClientOutputContextBoundsInheritedPipes(t *testing.T) {
 	}
 }
 
-func TestExternalClientOutputContextSuccess(t *testing.T) {
+func TestExternalClientOutputSuccess(t *testing.T) {
 	t.Parallel()
 
 	binary, _ := writeFakeSSH(t, `echo "ran: $*"`)
 	client := &ExternalClient{BinaryPath: binary, BaseArgs: []string{"user@host"}}
 
-	out, err := client.OutputContext(context.Background(), "exit 0")
+	out, err := client.Output(context.Background(), "exit 0")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -142,13 +142,13 @@ func TestExternalClientOutputContextSuccess(t *testing.T) {
 	}
 }
 
-func TestExternalClientOutputContextPassesThroughRemoteExit(t *testing.T) {
+func TestExternalClientOutputPassesThroughRemoteExit(t *testing.T) {
 	t.Parallel()
 
 	binary, _ := writeFakeSSH(t, "exit 255")
 	client := &ExternalClient{BinaryPath: binary, BaseArgs: []string{"user@host"}}
 
-	_, err := client.OutputContext(context.Background(), "exit 0")
+	_, err := client.Output(context.Background(), "exit 0")
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v", err)
 	}
@@ -158,7 +158,7 @@ func TestExternalClientOutputContextPassesThroughRemoteExit(t *testing.T) {
 	}
 }
 
-func TestExternalClientOutputContextDoesNotMutateBaseArgs(t *testing.T) {
+func TestExternalClientOutputDoesNotMutateBaseArgs(t *testing.T) {
 	t.Parallel()
 
 	binary, _ := writeFakeSSH(t, "exit 0")
@@ -166,7 +166,7 @@ func TestExternalClientOutputContextDoesNotMutateBaseArgs(t *testing.T) {
 	base[0] = "user@host"
 	client := &ExternalClient{BinaryPath: binary, BaseArgs: base}
 
-	if _, err := client.OutputContext(context.Background(), "first"); err != nil {
+	if _, err := client.Output(context.Background(), "first"); err != nil {
 		t.Fatal(err)
 	}
 	if got := base[:cap(base)][1]; got != "" {
@@ -204,7 +204,7 @@ func tarpit(t *testing.T) (addr *net.TCPAddr, closed <-chan struct{}) {
 	return l.Addr().(*net.TCPAddr), ch
 }
 
-func TestNativeClientOutputContextCancelsBlockedHandshake(t *testing.T) {
+func TestNativeClientOutputCancelsBlockedHandshake(t *testing.T) {
 	addr, closed := tarpit(t)
 	client := &NativeClient{
 		Config:   ssh.ClientConfig{User: "user", HostKeyCallback: ssh.InsecureIgnoreHostKey()},
@@ -216,7 +216,7 @@ func TestNativeClientOutputContextCancelsBlockedHandshake(t *testing.T) {
 	defer cancel()
 
 	started := time.Now()
-	_, err := client.OutputContext(ctx, "exit 0")
+	_, err := client.Output(ctx, "exit 0")
 	elapsed := time.Since(started)
 
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -233,7 +233,7 @@ func TestNativeClientOutputContextCancelsBlockedHandshake(t *testing.T) {
 	}
 }
 
-func TestNativeClientOutputContextDialsOnce(t *testing.T) {
+func TestNativeClientOutputDialsOnce(t *testing.T) {
 	t.Parallel()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -250,7 +250,7 @@ func TestNativeClientOutputContextDialsOnce(t *testing.T) {
 	}
 
 	started := time.Now()
-	_, err = client.OutputContext(context.Background(), "exit 0")
+	_, err = client.Output(context.Background(), "exit 0")
 	if err == nil {
 		t.Fatal("expected a dial error")
 	}
@@ -312,7 +312,7 @@ func serveExecExit0(t *testing.T) *net.TCPAddr {
 	return l.Addr().(*net.TCPAddr)
 }
 
-func TestNativeClientOutputContextSuccess(t *testing.T) {
+func TestNativeClientOutputSuccess(t *testing.T) {
 	t.Parallel()
 
 	addr := serveExecExit0(t)
@@ -325,7 +325,7 @@ func TestNativeClientOutputContextSuccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if _, err := client.OutputContext(ctx, "exit 0"); err != nil {
+	if _, err := client.Output(ctx, "exit 0"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -74,7 +74,7 @@ func TestWaitForSSHWithoutDeadlineSucceeds(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	for _, value := range []string{"", "0", "soon", "5ms", "2m"} {
+	for _, value := range []string{"", "0", "soon", "5ms", "59s"} {
 		t.Run("value="+value, func(t *testing.T) {
 			t.Setenv("DOCKER_MACHINE_SSH_READINESS_TIMEOUT", value)
 			if value == "" {
