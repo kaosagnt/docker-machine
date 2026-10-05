@@ -282,8 +282,8 @@ func sshReadinessTimeout() (time.Duration, bool) {
 
 	timeout, err := time.ParseDuration(value)
 	if err != nil || timeout < minSSHReadinessTimeout {
-		log.Warnf("Ignoring %s=%q: want a duration of at least %s, such as 10m; SSH readiness has no overall deadline",
-			sshReadinessTimeoutEnv, value, minSSHReadinessTimeout)
+		log.Warnf("Ignoring %s=%q: want a duration of at least a minute, such as 10m; SSH readiness has no overall deadline",
+			sshReadinessTimeoutEnv, value)
 		return 0, false
 	}
 
