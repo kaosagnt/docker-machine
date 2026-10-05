@@ -1,6 +1,7 @@
 package provision
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/docker/machine/libmachine/drivers"
@@ -28,7 +29,7 @@ func (sshCmder RedHatSSHCommander) SSHCommand(args string) (string, error) {
 	switch c := client.(type) {
 	case *ssh.ExternalClient:
 		c.BaseArgs = append(c.BaseArgs, "-tt")
-		output, err = c.Output(args)
+		output, err = c.Output(context.Background(), args)
 	case *ssh.NativeClient:
 		output, err = c.OutputWithPty(args)
 	}

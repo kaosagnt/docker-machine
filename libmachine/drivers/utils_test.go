@@ -117,7 +117,7 @@ type fakeSeqClient struct {
 	calls int
 }
 
-func (c *fakeSeqClient) Output(command string) (string, error) {
+func (c *fakeSeqClient) Output(ctx context.Context, command string) (string, error) {
 	if c.calls >= len(c.queue) {
 		return "", fmt.Errorf("unexpected extra Output call #%d for %q", c.calls+1, command)
 	}
