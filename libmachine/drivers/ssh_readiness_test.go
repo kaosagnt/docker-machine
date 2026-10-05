@@ -248,17 +248,20 @@ func TestWaitForSSHTimeoutLogsReason(t *testing.T) {
 	t.Fatalf("no ssh_readiness_timeout entry in %q", buf.String())
 }
 
-func TestSSHReadinessBackOffMatchesOldSchedule(t *testing.T) {
+func TestDefaultSSHReadinessParamsKeepOldSchedule(t *testing.T) {
 	t.Parallel()
 
-	b := sshReadinessBackOff()
+	p := defaultSSHReadinessParams()
+	if p.clientFactory == nil {
+		t.Fatal("clientFactory is nil")
+	}
+	b := p.backOff()
 	waits := 0
-	for {
-		next := b.NextBackOff()
-		if next == backoff.Stop {
-			break
-		}
+	for next := b.NextBackOff(); next != backoff.Stop; next = b.NextBackOff() {
 		waits++
+		if waits > 59 {
+			t.Fatal("more than 59 waits")
+		}
 		if next < 3*time.Second || next > 12*time.Second {
 			t.Fatalf("wait %d = %s, want 3s to 12s", waits, next)
 		}
