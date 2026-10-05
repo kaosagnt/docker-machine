@@ -243,8 +243,9 @@ const sshReadinessTimeoutEnv = "DOCKER_MACHINE_SSH_READINESS_TIMEOUT"
 // A shorter deadline, such as 5ms typed for 5m, would fail every create.
 var minSSHReadinessTimeout = time.Minute
 
-// Drivers that call WaitForSSH in their plugin process return this over RPC
-// as text, so errors.Is only matches in-process.
+// ErrSSHReadinessTimeout is returned when the deadline passes. Drivers that
+// call WaitForSSH in their plugin process return it over RPC as text, so
+// errors.Is only matches in-process.
 var ErrSSHReadinessTimeout = errors.New("SSH readiness deadline exceeded")
 
 type sshReadinessParams struct {
@@ -266,14 +267,13 @@ func sshReadinessBackOff() backoff.BackOff {
 }
 
 func sshProbeInterval() *backoff.ExponentialBackOff {
-	b := backoff.NewExponentialBackOff()
-	b.InitialInterval = 7500 * time.Millisecond
-	b.RandomizationFactor = 0.6
-	b.Multiplier = 1
-	// The default of 15 minutes would cap the wait when no deadline is set.
-	b.MaxElapsedTime = 0
-	b.Reset()
-	return b
+	return backoff.NewExponentialBackOff(
+		backoff.WithInitialInterval(7500*time.Millisecond),
+		backoff.WithRandomizationFactor(0.6),
+		backoff.WithMultiplier(1),
+		// The default of 15 minutes would cap the wait when no deadline is set.
+		backoff.WithMaxElapsedTime(0),
+	)
 }
 
 func sshReadinessTimeout() (time.Duration, bool) {
