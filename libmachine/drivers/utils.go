@@ -127,10 +127,8 @@ func isSSHTransportError(err error) bool {
 	}
 
 	// An explicit cancellation or deadline is a caller decision to stop, not a
-	// transient transport blip — never retry past it. (The current ssh.Client
-	// surface does not carry a context, but guard it so a future
-	// context-aware client cannot be silently retried against the caller's
-	// intent.)
+	// transient transport blip — never retry past it. ssh.ContextClient
+	// reports one this way.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
@@ -240,7 +238,9 @@ output  : %s`, command, err, output)
 // long as it always has, about 40 minutes for a host that never answers.
 const sshReadinessTimeoutEnv = "DOCKER_MACHINE_SSH_READINESS_TIMEOUT"
 
-// A shorter deadline, such as 5ms typed for 5m, would fail every create.
+// A shorter deadline, such as 5ms typed for 5m, would fail every create. The
+// floor only catches typos; a value just above it can still time out healthy
+// but slow machines.
 var minSSHReadinessTimeout = time.Minute
 
 // ErrSSHReadinessTimeout is returned when the deadline passes. Drivers that

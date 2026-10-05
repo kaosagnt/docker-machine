@@ -1,7 +1,10 @@
 package drivers
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -11,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/ssh"
 )
 
@@ -211,6 +215,37 @@ func TestWaitForSSHFallsBackToOutput(t *testing.T) {
 	if client.calls != 2 {
 		t.Fatalf("Output calls = %d, want 2", client.calls)
 	}
+}
+
+// Alerts key on these fields. Not parallel: replaces the package logger.
+func TestWaitForSSHTimeoutLogsReason(t *testing.T) {
+	prev := log.Format()
+	if err := log.SetFormat(log.FormatJSON); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = log.SetFormat(prev) })
+	var buf bytes.Buffer
+	log.SetOutWriter(&buf)
+	log.SetErrWriter(&buf)
+
+	params, _ := readinessParams(func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}, noWait)
+	_ = waitForSSH(withDeadline(t, 100*time.Millisecond), nil, 100*time.Millisecond, params)
+
+	scanner := bufio.NewScanner(&buf)
+	for scanner.Scan() {
+		var entry map[string]any
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil || entry["reason"] != "ssh_readiness_timeout" {
+			continue
+		}
+		if entry["phase"] != "wait_ssh" || entry["level"] != "warn" || entry["ssh_probes"] != float64(1) || entry["timeout"] != "100ms" {
+			t.Fatalf("entry = %v", entry)
+		}
+		return
+	}
+	t.Fatalf("no ssh_readiness_timeout entry in %q", buf.String())
 }
 
 func TestSSHReadinessBackOffMatchesOldSchedule(t *testing.T) {
