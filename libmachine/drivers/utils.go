@@ -238,10 +238,9 @@ output  : %s`, command, err, output)
 // long as it always has, about 40 minutes for a host that never answers.
 const sshReadinessTimeoutEnv = "DOCKER_MACHINE_SSH_READINESS_TIMEOUT"
 
-// A shorter deadline, such as 5ms typed for 5m, would fail every create. The
-// floor only catches typos; a value just above it can still time out healthy
-// but slow machines.
-var minSSHReadinessTimeout = time.Minute
+// Below five minutes slow but healthy machines start to time out, and a typo
+// such as 5ms for 5m would fail every create.
+var minSSHReadinessTimeout = 5 * time.Minute
 
 // ErrSSHReadinessTimeout is returned when the deadline passes. Drivers that
 // call WaitForSSH in their plugin process return it over RPC as text, so
@@ -284,7 +283,7 @@ func sshReadinessTimeout() (time.Duration, bool) {
 
 	timeout, err := time.ParseDuration(value)
 	if err != nil || timeout < minSSHReadinessTimeout {
-		log.Warnf("Ignoring %s=%q: want a duration of at least %s, such as 5m; SSH readiness has no overall deadline",
+		log.Warnf("Ignoring %s=%q: want a duration of at least %s, such as 10m; SSH readiness has no overall deadline",
 			sshReadinessTimeoutEnv, value, minSSHReadinessTimeout)
 		return 0, false
 	}
