@@ -40,7 +40,7 @@ func TestFactoryNewDriver(t *testing.T) {
 
 	t.Run("registered driver runs in-process", func(t *testing.T) {
 		plugin := &fakePluginFactory{}
-		f := &Factory{Plugin: plugin}
+		f := &Factory{plugin: plugin}
 
 		d, err := f.NewDriver("fake", raw)
 		require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestFactoryNewDriver(t *testing.T) {
 
 	t.Run("unknown driver goes to the plugin factory", func(t *testing.T) {
 		plugin := &fakePluginFactory{}
-		f := &Factory{Plugin: plugin}
+		f := &Factory{plugin: plugin}
 
 		_, err := f.NewDriver("third-party", raw)
 		assert.ErrorIs(t, err, errPlugin)
@@ -68,7 +68,7 @@ func TestFactoryNewDriver(t *testing.T) {
 
 	t.Run("disabled factory goes to the plugin factory", func(t *testing.T) {
 		plugin := &fakePluginFactory{}
-		f := &Factory{Plugin: plugin, disabled: true}
+		f := &Factory{plugin: plugin, disabled: true}
 
 		_, err := f.NewDriver("fake", raw)
 		assert.ErrorIs(t, err, errPlugin)
@@ -76,14 +76,14 @@ func TestFactoryNewDriver(t *testing.T) {
 	})
 
 	t.Run("invalid JSON is an error", func(t *testing.T) {
-		f := &Factory{Plugin: &fakePluginFactory{}}
+		f := &Factory{plugin: &fakePluginFactory{}}
 		_, err := f.NewDriver("fake", []byte("{"))
 		assert.Error(t, err)
 	})
 
 	t.Run("Close closes the plugin factory", func(t *testing.T) {
 		plugin := &fakePluginFactory{}
-		f := &Factory{Plugin: plugin}
+		f := &Factory{plugin: plugin}
 		require.NoError(t, f.Close())
 		assert.True(t, plugin.closed)
 	})

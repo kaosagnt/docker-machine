@@ -51,15 +51,14 @@ func Enabled() bool {
 }
 
 // Factory builds registered drivers in-process and hands every other driver
-// name to Plugin, the RPC factory, so third-party driver binaries keep
-// working.
+// name to the RPC factory, so third-party driver binaries keep working.
 type Factory struct {
-	Plugin   rpcdriver.RPCClientDriverFactory
+	plugin   rpcdriver.RPCClientDriverFactory
 	disabled bool
 }
 
 func NewFactory(plugin rpcdriver.RPCClientDriverFactory) *Factory {
-	return &Factory{Plugin: plugin, disabled: !Enabled()}
+	return &Factory{plugin: plugin, disabled: !Enabled()}
 }
 
 // NewDriver returns the driver for driverName configured from rawDriver, the
@@ -67,7 +66,7 @@ func NewFactory(plugin rpcdriver.RPCClientDriverFactory) *Factory {
 func (f *Factory) NewDriver(driverName string, rawDriver []byte) (drivers.Driver, error) {
 	newDriver, ok := lookup(driverName)
 	if !ok || f.disabled {
-		return f.Plugin.NewRPCClientDriver(driverName, rawDriver)
+		return f.plugin.NewRPCClientDriver(driverName, rawDriver)
 	}
 
 	d := newDriver()
@@ -80,5 +79,5 @@ func (f *Factory) NewDriver(driverName string, rawDriver []byte) (drivers.Driver
 }
 
 func (f *Factory) Close() error {
-	return f.Plugin.Close()
+	return f.plugin.Close()
 }
