@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"flag"
+	"github.com/codegangsta/cli"
 	"github.com/docker/machine/commands/commandstest"
 	"github.com/docker/machine/libmachine/mcnflag"
 	"github.com/stretchr/testify/assert"
@@ -117,3 +118,41 @@ func TestGetDriverOpts(t *testing.T) {
 		assert.Equal(t, tt.expected["stringslice_defaulted"], driverOpts.StringSlice("stringslice_defaulted"))
 	}
 }
+
+func TestConvertMcnFlagsToCliFlags(t *testing.T) {
+	// In-process drivers return flag values; plugins hand them back as
+	// pointers after the gob round trip.
+	for name, mcnFlags := range map[string][]mcnflag.Flag{
+		"values": {
+			mcnflag.BoolFlag{Name: "bool"},
+			mcnflag.IntFlag{Name: "int", Value: 42},
+			mcnflag.StringFlag{Name: "string", Value: "bob"},
+			mcnflag.StringSliceFlag{Name: "stringslice", Value: []string{"joe"}},
+		},
+		"pointers": {
+			&mcnflag.BoolFlag{Name: "bool"},
+			&mcnflag.IntFlag{Name: "int", Value: 42},
+			&mcnflag.StringFlag{Name: "string", Value: "bob"},
+			&mcnflag.StringSliceFlag{Name: "stringslice", Value: []string{"joe"}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cliFlags, err := convertMcnFlagsToCliFlags(mcnFlags)
+			assert.NoError(t, err)
+			assert.Equal(t, []cli.Flag{
+				cli.BoolFlag{Name: "bool"},
+				cli.IntFlag{Name: "int", Value: 42},
+				cli.StringFlag{Name: "string", Value: "bob"},
+				cli.StringSliceFlag{Name: "stringslice", Value: &cli.StringSlice{}},
+			}, cliFlags)
+		})
+	}
+
+	_, err := convertMcnFlagsToCliFlags([]mcnflag.Flag{unknownFlag{}})
+	assert.EqualError(t, err, "Flag is unrecognized flag type: commands.unknownFlag")
+}
+
+type unknownFlag struct{}
+
+func (unknownFlag) String() string       { return "unknown" }
+func (unknownFlag) Default() interface{} { return nil }

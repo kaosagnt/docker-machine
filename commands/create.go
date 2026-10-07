@@ -391,39 +391,47 @@ func getDriverOpts(c CommandLine, mcnflags []mcnflag.Flag) drivers.DriverOptions
 func convertMcnFlagsToCliFlags(mcnFlags []mcnflag.Flag) ([]cli.Flag, error) {
 	cliFlags := []cli.Flag{}
 	for _, f := range mcnFlags {
+		// Drivers return flag values; gob hands plugin flags back as pointers.
+		switch t := f.(type) {
+		case *mcnflag.BoolFlag:
+			f = *t
+		case *mcnflag.IntFlag:
+			f = *t
+		case *mcnflag.StringFlag:
+			f = *t
+		case *mcnflag.StringSliceFlag:
+			f = *t
+		}
+
 		switch t := f.(type) {
 		// TODO: It seems pretty wrong to just default "nil" to this,
 		// but cli.BoolFlag doesn't have a "Value" field (false is
 		// always the default)
-		case *mcnflag.BoolFlag:
-			f := f.(*mcnflag.BoolFlag)
+		case mcnflag.BoolFlag:
 			cliFlags = append(cliFlags, cli.BoolFlag{
-				Name:   f.Name,
-				EnvVar: f.EnvVar,
-				Usage:  f.Usage,
+				Name:   t.Name,
+				EnvVar: t.EnvVar,
+				Usage:  t.Usage,
 			})
-		case *mcnflag.IntFlag:
-			f := f.(*mcnflag.IntFlag)
+		case mcnflag.IntFlag:
 			cliFlags = append(cliFlags, cli.IntFlag{
-				Name:   f.Name,
-				EnvVar: f.EnvVar,
-				Usage:  f.Usage,
-				Value:  f.Value,
+				Name:   t.Name,
+				EnvVar: t.EnvVar,
+				Usage:  t.Usage,
+				Value:  t.Value,
 			})
-		case *mcnflag.StringFlag:
-			f := f.(*mcnflag.StringFlag)
+		case mcnflag.StringFlag:
 			cliFlags = append(cliFlags, cli.StringFlag{
-				Name:   f.Name,
-				EnvVar: f.EnvVar,
-				Usage:  f.Usage,
-				Value:  f.Value,
+				Name:   t.Name,
+				EnvVar: t.EnvVar,
+				Usage:  t.Usage,
+				Value:  t.Value,
 			})
-		case *mcnflag.StringSliceFlag:
-			f := f.(*mcnflag.StringSliceFlag)
+		case mcnflag.StringSliceFlag:
 			cliFlags = append(cliFlags, cli.StringSliceFlag{
-				Name:   f.Name,
-				EnvVar: f.EnvVar,
-				Usage:  f.Usage,
+				Name:   t.Name,
+				EnvVar: t.EnvVar,
+				Usage:  t.Usage,
 
 				//TODO: Is this used with defaults? Can we convert the literal []string to cli.StringSlice properly?
 				Value: &cli.StringSlice{},
