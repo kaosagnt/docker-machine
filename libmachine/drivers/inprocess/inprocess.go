@@ -21,7 +21,6 @@ var (
 	constructors = map[string]func() drivers.Driver{}
 )
 
-// Register makes a compiled-in driver available to Factory under name.
 func Register(name string, newDriver func() drivers.Driver) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -35,7 +34,6 @@ func lookup(name string) (func() drivers.Driver, bool) {
 	return newDriver, ok
 }
 
-// Enabled reads EnvKey. Unset or unparsable means disabled.
 func Enabled() bool {
 	v := os.Getenv(EnvKey)
 	if v == "" {
@@ -49,8 +47,8 @@ func Enabled() bool {
 	return enabled
 }
 
-// Factory builds registered drivers in-process and hands every other driver
-// name to the RPC factory, so third-party driver binaries keep working.
+// Unregistered driver names go to the RPC factory, so third-party driver
+// binaries keep working.
 type Factory struct {
 	plugin  rpcdriver.RPCClientDriverFactory
 	enabled bool
@@ -60,8 +58,6 @@ func NewFactory(plugin rpcdriver.RPCClientDriverFactory) *Factory {
 	return &Factory{plugin: plugin, enabled: Enabled()}
 }
 
-// NewDriver returns the driver for driverName loaded from the host's stored
-// driver JSON.
 func (f *Factory) NewDriver(driverName string, rawDriver []byte) (drivers.Driver, error) {
 	newDriver, ok := lookup(driverName)
 	if !ok || !f.enabled {

@@ -9,9 +9,8 @@ import (
 	"github.com/docker/machine/libmachine/state"
 )
 
-// recovering turns a panic in the driver into an error, which is what the
-// caller saw when the plugin process died during a call. Methods without an
-// error result pass through.
+// A panic in the driver becomes an error, which is what the caller saw when
+// the plugin process died during a call.
 type recovering struct {
 	drivers.Driver
 }
