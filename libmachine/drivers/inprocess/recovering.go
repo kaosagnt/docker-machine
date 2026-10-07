@@ -10,8 +10,8 @@ import (
 )
 
 // recovering turns a panic in the driver into an error, which is what the
-// caller saw when the plugin process died mid-call. Methods without an error
-// result are the BaseDriver getters and pass through.
+// caller saw when the plugin process died during a call. Methods without an
+// error result pass through.
 type recovering struct {
 	drivers.Driver
 }

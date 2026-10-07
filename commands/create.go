@@ -391,7 +391,7 @@ func getDriverOpts(c CommandLine, mcnflags []mcnflag.Flag) drivers.DriverOptions
 func convertMcnFlagsToCliFlags(mcnFlags []mcnflag.Flag) ([]cli.Flag, error) {
 	cliFlags := []cli.Flag{}
 	for _, f := range mcnFlags {
-		// Drivers return flag values; gob hands plugin flags back as pointers.
+		// Plugin flags come back from gob as pointers, in-process ones as values.
 		switch t := f.(type) {
 		case *mcnflag.BoolFlag:
 			f = *t

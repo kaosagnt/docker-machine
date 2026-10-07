@@ -120,8 +120,6 @@ func TestGetDriverOpts(t *testing.T) {
 }
 
 func TestConvertMcnFlagsToCliFlags(t *testing.T) {
-	// In-process drivers return flag values; plugins hand them back as
-	// pointers after the gob round trip.
 	for name, mcnFlags := range map[string][]mcnflag.Flag{
 		"values": {
 			mcnflag.BoolFlag{Name: "bool"},

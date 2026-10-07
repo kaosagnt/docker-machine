@@ -13,8 +13,7 @@ import (
 	"github.com/docker/machine/libmachine/log"
 )
 
-// EnvKey disables the in-process path when set to a false value; core
-// drivers then run as plugin subprocesses as before.
+// EnvKey set to a false value puts core drivers back on the plugin path.
 const EnvKey = "MACHINE_DRIVER_INPROCESS"
 
 var (
@@ -61,8 +60,8 @@ func NewFactory(plugin rpcdriver.RPCClientDriverFactory) *Factory {
 	return &Factory{plugin: plugin, disabled: !Enabled()}
 }
 
-// NewDriver returns the driver for driverName configured from rawDriver, the
-// JSON the store holds for the host.
+// NewDriver returns the driver for driverName loaded from the host's stored
+// driver JSON.
 func (f *Factory) NewDriver(driverName string, rawDriver []byte) (drivers.Driver, error) {
 	newDriver, ok := lookup(driverName)
 	if !ok || f.disabled {
