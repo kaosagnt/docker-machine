@@ -26,6 +26,8 @@ import (
 	"github.com/docker/machine/drivers/vmwarefusion"
 	"github.com/docker/machine/drivers/vmwarevcloudair"
 	"github.com/docker/machine/drivers/vmwarevsphere"
+	"github.com/docker/machine/libmachine/drivers"
+	"github.com/docker/machine/libmachine/drivers/inprocess"
 	"github.com/docker/machine/libmachine/drivers/plugin"
 	"github.com/docker/machine/libmachine/drivers/plugin/localbinary"
 	"github.com/docker/machine/libmachine/log"
@@ -112,6 +114,9 @@ func main() {
 	}
 
 	localbinary.CurrentBinaryIsDockerMachine = true
+	for name, newDriver := range coreDrivers {
+		inprocess.Register(name, newDriver)
+	}
 
 	setLogFormat()
 	setDebugOutputLevel()
@@ -194,42 +199,31 @@ func main() {
 	}
 }
 
+var coreDrivers = map[string]func() drivers.Driver{
+	"amazonec2":       func() drivers.Driver { return amazonec2.NewDriver("", "") },
+	"azure":           func() drivers.Driver { return azure.NewDriver("", "") },
+	"digitalocean":    func() drivers.Driver { return digitalocean.NewDriver("", "") },
+	"exoscale":        func() drivers.Driver { return exoscale.NewDriver("", "") },
+	"generic":         func() drivers.Driver { return generic.NewDriver("", "") },
+	"google":          func() drivers.Driver { return google.NewDriver("", "") },
+	"hyperv":          func() drivers.Driver { return hyperv.NewDriver("", "") },
+	"none":            func() drivers.Driver { return none.NewDriver("", "") },
+	"openstack":       func() drivers.Driver { return openstack.NewDriver("", "") },
+	"rackspace":       func() drivers.Driver { return rackspace.NewDriver("", "") },
+	"softlayer":       func() drivers.Driver { return softlayer.NewDriver("", "") },
+	"virtualbox":      func() drivers.Driver { return virtualbox.NewDriver("", "") },
+	"vmwarefusion":    func() drivers.Driver { return vmwarefusion.NewDriver("", "") },
+	"vmwarevcloudair": func() drivers.Driver { return vmwarevcloudair.NewDriver("", "") },
+	"vmwarevsphere":   func() drivers.Driver { return vmwarevsphere.NewDriver("", "") },
+}
+
 func runDriver(driverName string) {
-	switch driverName {
-	case "amazonec2":
-		plugin.RegisterDriver(amazonec2.NewDriver("", ""))
-	case "azure":
-		plugin.RegisterDriver(azure.NewDriver("", ""))
-	case "digitalocean":
-		plugin.RegisterDriver(digitalocean.NewDriver("", ""))
-	case "exoscale":
-		plugin.RegisterDriver(exoscale.NewDriver("", ""))
-	case "generic":
-		plugin.RegisterDriver(generic.NewDriver("", ""))
-	case "google":
-		plugin.RegisterDriver(google.NewDriver("", ""))
-	case "hyperv":
-		plugin.RegisterDriver(hyperv.NewDriver("", ""))
-	case "none":
-		plugin.RegisterDriver(none.NewDriver("", ""))
-	case "openstack":
-		plugin.RegisterDriver(openstack.NewDriver("", ""))
-	case "rackspace":
-		plugin.RegisterDriver(rackspace.NewDriver("", ""))
-	case "softlayer":
-		plugin.RegisterDriver(softlayer.NewDriver("", ""))
-	case "virtualbox":
-		plugin.RegisterDriver(virtualbox.NewDriver("", ""))
-	case "vmwarefusion":
-		plugin.RegisterDriver(vmwarefusion.NewDriver("", ""))
-	case "vmwarevcloudair":
-		plugin.RegisterDriver(vmwarevcloudair.NewDriver("", ""))
-	case "vmwarevsphere":
-		plugin.RegisterDriver(vmwarevsphere.NewDriver("", ""))
-	default:
+	newDriver, ok := coreDrivers[driverName]
+	if !ok {
 		fmt.Fprintf(os.Stderr, "Unsupported driver: %s\n", driverName)
 		os.Exit(1)
 	}
+	plugin.RegisterDriver(newDriver())
 }
 
 func cmdNotFound(c *cli.Context, command string) {
