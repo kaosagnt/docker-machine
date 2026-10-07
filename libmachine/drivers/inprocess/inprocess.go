@@ -1,5 +1,3 @@
-// Package inprocess runs the drivers compiled into this binary in the client
-// process instead of in a plugin subprocess reached over RPC.
 package inprocess
 
 import (
