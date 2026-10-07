@@ -40,7 +40,7 @@ func TestFactoryNewDriver(t *testing.T) {
 
 	t.Run("registered driver runs in-process", func(t *testing.T) {
 		plugin := &fakePluginFactory{}
-		f := &Factory{plugin: plugin}
+		f := &Factory{plugin: plugin, enabled: true}
 
 		d, err := f.NewDriver("fake", raw)
 		require.NoError(t, err)
@@ -59,16 +59,16 @@ func TestFactoryNewDriver(t *testing.T) {
 
 	t.Run("unknown driver goes to the plugin factory", func(t *testing.T) {
 		plugin := &fakePluginFactory{}
-		f := &Factory{plugin: plugin}
+		f := &Factory{plugin: plugin, enabled: true}
 
 		_, err := f.NewDriver("third-party", raw)
 		assert.ErrorIs(t, err, errPlugin)
 		assert.Equal(t, []string{"third-party"}, plugin.calls)
 	})
 
-	t.Run("disabled factory goes to the plugin factory", func(t *testing.T) {
+	t.Run("the default factory goes to the plugin factory", func(t *testing.T) {
 		plugin := &fakePluginFactory{}
-		f := &Factory{plugin: plugin, disabled: true}
+		f := &Factory{plugin: plugin}
 
 		_, err := f.NewDriver("fake", raw)
 		assert.ErrorIs(t, err, errPlugin)
@@ -76,7 +76,7 @@ func TestFactoryNewDriver(t *testing.T) {
 	})
 
 	t.Run("invalid JSON is an error", func(t *testing.T) {
-		f := &Factory{plugin: &fakePluginFactory{}}
+		f := &Factory{plugin: &fakePluginFactory{}, enabled: true}
 		_, err := f.NewDriver("fake", []byte("{"))
 		assert.Error(t, err)
 	})
@@ -94,12 +94,12 @@ func TestEnabled(t *testing.T) {
 		value string
 		want  bool
 	}{
-		{"", true},
+		{"", false},
 		{"1", true},
 		{"true", true},
 		{"0", false},
 		{"false", false},
-		{"maybe", true},
+		{"maybe", false},
 	} {
 		t.Run("value="+tc.value, func(t *testing.T) {
 			t.Setenv(EnvKey, tc.value)
@@ -107,9 +107,9 @@ func TestEnabled(t *testing.T) {
 		})
 	}
 	t.Run("factory reads the env", func(t *testing.T) {
-		t.Setenv(EnvKey, "0")
-		assert.True(t, NewFactory(&fakePluginFactory{}).disabled)
+		t.Setenv(EnvKey, "1")
+		assert.True(t, NewFactory(&fakePluginFactory{}).enabled)
 		t.Setenv(EnvKey, "")
-		assert.False(t, NewFactory(&fakePluginFactory{}).disabled)
+		assert.False(t, NewFactory(&fakePluginFactory{}).enabled)
 	})
 }

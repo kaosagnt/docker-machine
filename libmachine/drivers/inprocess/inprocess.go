@@ -13,7 +13,7 @@ import (
 	"github.com/docker/machine/libmachine/log"
 )
 
-// EnvKey set to a false value puts core drivers back on the plugin path.
+// EnvKey set to a true value runs core drivers in-process. Off by default.
 const EnvKey = "MACHINE_DRIVER_INPROCESS"
 
 var (
@@ -35,16 +35,16 @@ func lookup(name string) (func() drivers.Driver, bool) {
 	return newDriver, ok
 }
 
-// Enabled reads EnvKey. Unset or unparsable means enabled.
+// Enabled reads EnvKey. Unset or unparsable means disabled.
 func Enabled() bool {
 	v := os.Getenv(EnvKey)
 	if v == "" {
-		return true
+		return false
 	}
 	enabled, err := strconv.ParseBool(v)
 	if err != nil {
 		log.Warnf("Ignoring %s=%q: %s", EnvKey, v, err)
-		return true
+		return false
 	}
 	return enabled
 }
@@ -52,19 +52,19 @@ func Enabled() bool {
 // Factory builds registered drivers in-process and hands every other driver
 // name to the RPC factory, so third-party driver binaries keep working.
 type Factory struct {
-	plugin   rpcdriver.RPCClientDriverFactory
-	disabled bool
+	plugin  rpcdriver.RPCClientDriverFactory
+	enabled bool
 }
 
 func NewFactory(plugin rpcdriver.RPCClientDriverFactory) *Factory {
-	return &Factory{plugin: plugin, disabled: !Enabled()}
+	return &Factory{plugin: plugin, enabled: Enabled()}
 }
 
 // NewDriver returns the driver for driverName loaded from the host's stored
 // driver JSON.
 func (f *Factory) NewDriver(driverName string, rawDriver []byte) (drivers.Driver, error) {
 	newDriver, ok := lookup(driverName)
-	if !ok || f.disabled {
+	if !ok || !f.enabled {
 		return f.plugin.NewRPCClientDriver(driverName, rawDriver)
 	}
 
