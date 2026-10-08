@@ -12,6 +12,9 @@ type Options struct {
 	ServerKeyRemotePath  string
 	ClientCertPath       string
 	ServerCertSANs       []string
+	// ServerName, when set, is the name the server certificate is verified
+	// against instead of the address being dialed.
+	ServerName string
 	// StorePath is left in for historical reasons, but not really meant to
 	// be used directly.
 	StorePath string

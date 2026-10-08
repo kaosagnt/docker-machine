@@ -36,6 +36,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/machine/libmachine/log"
 	raw "google.golang.org/api/compute/v1"
@@ -146,19 +147,42 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 		return err
 	}
 
-	log.Infof("Creating instance via bulkInsert in %q across %d selection(s)", c.region(), len(selections))
+	health := newPlacementHealth(d, time.Now)
+	selections = health.order(d, selections)
+
+	log.WithFields(log.Fields{"region": c.region(), "selections": len(selections)}).Info("Creating instance via bulkInsert")
 
 	stockoutErrs := make([]error, 0, len(selections))
 	for i, sel := range selections {
-		log.Infof("bulkInsert attempt %d/%d: machine-type=%q disk-type=%q", i+1, len(selections), sel.MachineType, sel.DiskType)
+		log.WithFields(log.Fields{
+			"attempt":      i + 1,
+			"attempts":     len(selections),
+			"machine_type": sel.MachineType,
+			"disk_type":    sel.DiskType,
+		}).Info("bulkInsert attempt")
 		retryable, attemptErr := c.attemptBulkInsertForSelection(d, sel)
+		observedAt := time.Now()
 		if attemptErr == nil {
+			if err := health.recordPlacementAt(d, sel, observedAt); err != nil {
+				log.Warnf("Could not record successful bulkInsert placement health: %v", err)
+			}
 			return c.finishPostCreate(d)
 		}
 		if !retryable {
+			if err := health.releaseProbe(d, sel); err != nil {
+				log.Warnf("Could not release bulkInsert placement probe: %v", err)
+			}
 			return attemptErr
 		}
-		log.Warnf("bulkInsert selection %d/%d (%s) hit stockout-class failure, falling through: %v", i+1, len(selections), sel.MachineType, attemptErr)
+		log.WithFields(log.Fields{
+			"attempt":      i + 1,
+			"attempts":     len(selections),
+			"machine_type": sel.MachineType,
+			"error":        attemptErr.Error(),
+		}).Warn("bulkInsert selection hit stockout-class failure, falling through")
+		if err := health.recordStockoutAt(d, sel, observedAt); err != nil {
+			log.Warnf("Could not record bulkInsert stockout health: %v", err)
+		}
 		stockoutErrs = append(stockoutErrs, fmt.Errorf("selection %d/%d (machine-type=%s): %w", i+1, len(selections), sel.MachineType, attemptErr))
 	}
 
@@ -252,7 +276,7 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 		return false, fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, c.region())
 	}
 
-	log.Infof("Waiting for bulkInsert operation %s", op.Name)
+	log.WithField("operation", op.Name).Info("Waiting for bulkInsert operation")
 	doneOp, waitErr := c.waitForRegionOpResult(op.Name)
 	if waitErr != nil {
 		// The operation failed overall, but it may still have placed the
@@ -302,7 +326,7 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver, sel flexSelec
 		net = c.globalURL + "/networks/" + d.Network
 	}
 
-	metadata, err := prepareMetadata(d)
+	metadata, err := c.prepareMetadata(d)
 	if err != nil {
 		return nil, err
 	}
@@ -347,12 +371,7 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver, sel flexSelec
 		Tags: &raw.Tags{
 			Items: parseTags(d),
 		},
-		ServiceAccounts: []*raw.ServiceAccount{
-			{
-				Email:  d.ServiceAccount,
-				Scopes: strings.Split(d.Scopes, ","),
-			},
-		},
+		ServiceAccounts: serviceAccounts(d),
 		Scheduling: &raw.Scheduling{
 			Preemptible: c.preemptible,
 		},
@@ -708,8 +727,12 @@ func (c *ComputeUtil) discoverInstanceZone() (string, error) {
 			return zone, nil
 		}
 	}
-	return "", fmt.Errorf("instance %q not found in any zone after bulkInsert (operation completed but aggregatedList did not return it)", c.instanceName)
+	return "", fmt.Errorf("instance %q not found in any zone after bulkInsert (operation completed but aggregatedList did not return it): %w", c.instanceName, errInstanceNotPlaced)
 }
+
+// errInstanceNotPlaced reports a lookup that succeeded and found no
+// instance, as opposed to a lookup that failed.
+var errInstanceNotPlaced = errors.New("instance not placed")
 
 // resolvePlacedZone returns the zone the just-created bulkInsert VM
 // landed in. It prefers the zone the operation already reported
@@ -736,7 +759,7 @@ func (c *ComputeUtil) resolvePlacedZone() (string, error) {
 // finishPostCreate runs the post-bulkInsert work: resolve the zone GCP
 // placed the VM in, set the driver / compute-util zone fields, fetch
 // the instance, record the flex-picked machine type, add the firewall
-// tag, push the SSH key.
+// tag.
 func (c *ComputeUtil) finishPostCreate(d *Driver) error {
 	zone, err := c.resolvePlacedZone()
 	if err != nil {
@@ -752,13 +775,13 @@ func (c *ComputeUtil) finishPostCreate(d *Driver) error {
 	}
 
 	c.syncResolvedMachineType(d, instance)
-	log.Infof("bulkInsert placed as %s in %s", d.ResolvedMachineType, d.ResolvedZone)
+	log.WithFields(log.Fields{"machine_type": d.ResolvedMachineType, "zone": d.ResolvedZone}).Info("bulkInsert placed")
 
 	if err := c.addFirewallTag(instance); err != nil {
 		return fmt.Errorf("adding firewall tag to bulkInsert instance %q: %w", c.instanceName, err)
 	}
 
-	return c.uploadSSHKey(instance, d.GetSSHKeyPath())
+	return nil
 }
 
 // syncResolvedMachineType records the machine type GCP actually placed.

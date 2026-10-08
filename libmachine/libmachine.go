@@ -116,11 +116,13 @@ func (api *Client) Load(name string) (*host.Host, error) {
 // Create is the wrapper method which covers all of the boilerplate around
 // actually creating, provisioning, and persisting an instance in the store.
 func (api *Client) Create(h *host.Host) error {
+	log.WithField("phase", "bootstrap").Info("Bootstrapping certificates...")
+
 	if err := cert.BootstrapCertificates(h.AuthOptions()); err != nil {
 		return fmt.Errorf("Error generating certificates: %s", err)
 	}
 
-	log.Info("Running pre-create checks...")
+	log.WithField("phase", "pre_create").Info("Running pre-create checks...")
 
 	if err := h.Driver.PreCreateCheck(); err != nil {
 		return mcnerror.ErrDuringPreCreate{
@@ -132,7 +134,7 @@ func (api *Client) Create(h *host.Host) error {
 		return fmt.Errorf("Error saving host to store before attempting creation: %s", err)
 	}
 
-	log.Info("Creating machine...")
+	log.WithField("phase", "driver_create").Info("Creating machine...")
 
 	if err := api.performCreate(h); err != nil {
 		// Try to save machine when Create fails, it can store some critical information like DropletID
@@ -147,6 +149,11 @@ func (api *Client) Create(h *host.Host) error {
 }
 
 func (api *Client) performCreate(h *host.Host) error {
+	tlsBootstrap, err := prepareTLSBootstrap(h)
+	if err != nil {
+		return fmt.Errorf("Error preparing the TLS bootstrap: %s", err)
+	}
+
 	if err := h.Driver.Create(); err != nil {
 		return fmt.Errorf("Error in driver during machine creation: %s", err)
 	}
@@ -160,24 +167,31 @@ func (api *Client) performCreate(h *host.Host) error {
 		return nil
 	}
 
-	log.Info("Waiting for machine to be running, this may take a few minutes...")
+	log.WithField("phase", "wait_running").Info("Waiting for machine to be running, this may take a few minutes...")
 	if err := mcnutils.WaitFor(drivers.MachineInState(h.Driver, state.Running)); err != nil {
 		return fmt.Errorf("Error waiting for machine to be running: %s", err)
 	}
 
-	log.Info("Detecting operating system of created instance...")
-	provisioner, err := provision.DetectProvisioner(h.Driver)
-	if err != nil {
-		return fmt.Errorf("Error detecting OS: %s", err)
-	}
+	if tlsBootstrap {
+		log.WithField("phase", "wait_tls").Info("Waiting for Docker to accept TLS connections...")
+		if err := waitForTLS(h, tlsWaitTimeout); err != nil {
+			return fmt.Errorf("Error waiting for Docker TLS: %s", err)
+		}
+	} else {
+		log.Info("Detecting operating system of created instance...")
+		provisioner, err := provision.DetectProvisioner(h.Driver)
+		if err != nil {
+			return fmt.Errorf("Error detecting OS: %s", err)
+		}
 
-	log.Infof("Provisioning with %s...", provisioner.String())
-	if err := provisioner.Provision(*h.HostOptions.SwarmOptions, *h.HostOptions.AuthOptions, *h.HostOptions.EngineOptions); err != nil {
-		return fmt.Errorf("Error running provisioning: %s", err)
+		log.WithFields(log.Fields{"phase": "provision", "provisioner": provisioner.String()}).Info("Provisioning...")
+		if err := provisioner.Provision(*h.HostOptions.SwarmOptions, *h.HostOptions.AuthOptions, *h.HostOptions.EngineOptions); err != nil {
+			return fmt.Errorf("Error running provisioning: %s", err)
+		}
 	}
 
 	// We should check the connection to docker here
-	log.Info("Checking connection to Docker...")
+	log.WithField("phase", "docker_check").Info("Checking connection to Docker...")
 	if _, _, err = check.DefaultConnChecker.Check(h, false); err != nil {
 		return fmt.Errorf("Error checking the host: %s", err)
 	}

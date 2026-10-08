@@ -52,6 +52,10 @@ type ComputeUtil struct {
 	// distinguishes the field from the region() method.
 	regionExplicit string
 
+	// setResolvedZone writes a recovered zone back to the driver, so later
+	// ComputeUtil constructions in the same invocation skip rediscovery.
+	setResolvedZone func(string)
+
 	// bulkInsert policy inputs (empty in direct mode).
 	flexSelections []string
 	locationZones  []string
@@ -142,6 +146,7 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		flexSelections:          driver.FlexSelections,
 		locationZones:           driver.LocationZones,
 		bulkInsert:              driver.BulkInsert,
+		setResolvedZone:         func(z string) { driver.ResolvedZone = z },
 	}, nil
 }
 
@@ -352,6 +357,10 @@ func (c *ComputeUtil) openFirewallPorts(d *Driver) error {
 
 // instance retrieves the instance.
 func (c *ComputeUtil) instance() (*raw.Instance, error) {
+	if err := c.ensureZone("inspect"); err != nil {
+		return nil, err
+	}
+
 	return c.service.Instances.Get(c.project, c.zone, c.instanceName).Do()
 }
 
@@ -375,7 +384,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 		net = c.globalURL + "/networks/" + d.Network
 	}
 
-	metadata, err := prepareMetadata(d)
+	metadata, err := c.prepareMetadata(d)
 	if err != nil {
 		return err
 	}
@@ -401,12 +410,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 		Tags: &raw.Tags{
 			Items: parseTags(d),
 		},
-		ServiceAccounts: []*raw.ServiceAccount{
-			{
-				Email:  d.ServiceAccount,
-				Scopes: strings.Split(d.Scopes, ","),
-			},
-		},
+		ServiceAccounts: serviceAccounts(d),
 		Scheduling: &raw.Scheduling{
 			Preemptible: c.preemptible,
 		},
@@ -483,16 +487,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 	}
 
 	log.Infof("Waiting for Instance")
-	if err = c.waitForRegionalOp(op.Name); err != nil {
-		return err
-	}
-
-	instance, err = c.instance()
-	if err != nil {
-		return err
-	}
-
-	return c.uploadSSHKey(instance, d.GetSSHKeyPath())
+	return c.waitForRegionalOp(op.Name)
 }
 
 // configureInstance configures an existing instance for use with Docker Machine.
@@ -532,31 +527,15 @@ func (c *ComputeUtil) addFirewallTag(instance *raw.Instance) error {
 	return c.waitForRegionalOp(op.Name)
 }
 
-// uploadSSHKey updates the instance metadata with the given ssh key.
+// uploadSSHKey adds the SSH key to an existing instance. New instances get
+// it in the insert request.
 func (c *ComputeUtil) uploadSSHKey(instance *raw.Instance, sshKeyPath string) error {
 	log.Infof("Uploading SSH Key")
 
-	sshKey, err := ioutil.ReadFile(sshKeyPath + ".pub")
-	if err != nil {
+	metadata := instance.Metadata
+	if err := c.appendSSHKeyMetadata(metadata, sshKeyPath); err != nil {
 		return err
 	}
-
-	metaDataValue := fmt.Sprintf("%s:%s %s\n", c.userName, strings.TrimSpace(string(sshKey)), c.userName)
-
-	metadata := instance.Metadata
-	// "sshKeys" was deprecated in favor of "ssh-keys" metadata key. However, old images may still depend
-	// on the old metadata configuration. And users may still have legitimate reasons to use these older
-	// images. As instance metadata is a simple key-value store, it should have no problems with having
-	// the keys defined twice under two different names. Legacy images will then still be able to use the
-	// legacy key naming, while new ones will get support for the expected new naming.
-	metadata.Items = append(metadata.Items, &raw.MetadataItems{
-		Key:   "sshKeys",
-		Value: &metaDataValue,
-	})
-	metadata.Items = append(metadata.Items, &raw.MetadataItems{
-		Key:   "ssh-keys",
-		Value: &metaDataValue,
-	})
 
 	op, err := c.service.Instances.SetMetadata(c.project, c.zone, c.instanceName, metadata).Do()
 	if err != nil {
@@ -566,8 +545,22 @@ func (c *ComputeUtil) uploadSSHKey(instance *raw.Instance, sshKeyPath string) er
 	return c.waitForRegionalOp(op.Name)
 }
 
-// prepareMetadata prepares instance metadata entries from provided configuration
-func prepareMetadata(d *Driver) (*raw.Metadata, error) {
+// Both the current and the deprecated key name, for images that still read
+// the old one.
+func (c *ComputeUtil) appendSSHKeyMetadata(metadata *raw.Metadata, sshKeyPath string) error {
+	sshKey, err := ioutil.ReadFile(sshKeyPath + ".pub")
+	if err != nil {
+		return err
+	}
+
+	metaDataValue := fmt.Sprintf("%s:%s %s\n", c.userName, strings.TrimSpace(string(sshKey)), c.userName)
+	appendMetadata(metadata, "sshKeys", metaDataValue)
+	appendMetadata(metadata, "ssh-keys", metaDataValue)
+
+	return nil
+}
+
+func (c *ComputeUtil) prepareMetadata(d *Driver) (*raw.Metadata, error) {
 	metadata := &raw.Metadata{
 		Items: make([]*raw.MetadataItems, 0),
 	}
@@ -583,6 +576,17 @@ func prepareMetadata(d *Driver) (*raw.Metadata, error) {
 		}
 
 		appendMetadata(metadata, key, value)
+	}
+
+	if err := c.appendSSHKeyMetadata(metadata, d.GetSSHKeyPath()); err != nil {
+		return nil, err
+	}
+
+	if d.tlsBootstrap != nil {
+		appendMetadata(metadata, tlsCACertMetadataKey, string(d.tlsBootstrap.CACert))
+		appendMetadata(metadata, tlsServerCertMetadataKey, string(d.tlsBootstrap.ServerCert))
+		appendMetadata(metadata, tlsServerKeyMetadataKey, string(d.tlsBootstrap.ServerKey))
+		appendMetadata(metadata, dockerDaemonDropinMetadataKey, string(d.tlsBootstrap.DaemonDropin))
 	}
 
 	return metadata, nil
@@ -614,6 +618,21 @@ func appendMetadata(metadata *raw.Metadata, key string, value string) {
 	}
 
 	metadata.Items = append(metadata.Items, item)
+}
+
+// serviceAccounts returns the instance service account, or nil with
+// --google-no-service-account.
+func serviceAccounts(d *Driver) []*raw.ServiceAccount {
+	if d.NoServiceAccount {
+		return nil
+	}
+
+	return []*raw.ServiceAccount{
+		{
+			Email:  d.ServiceAccount,
+			Scopes: strings.Split(d.Scopes, ","),
+		},
+	}
 }
 
 // parseTags computes the tags for the instance.
@@ -648,31 +667,47 @@ func parseLabels(d *Driver) map[string]string {
 	return labels
 }
 
+// ensureZone recovers the zone a failed bulkInsert create never
+// recorded. Without it every zone-scoped API call fails with an
+// empty-zone 400. Direct mode treats an empty zone as a bug worth
+// surfacing. A never-placed instance yields a not-found error so
+// callers can reap local state.
+func (c *ComputeUtil) ensureZone(operation string) error {
+	if c.zone != "" {
+		return nil
+	}
+	if !c.bulkInsert {
+		return fmt.Errorf("cannot %s instance %q: zone unresolved in direct mode (Driver.Zone should always be set from --google-zone here)", operation, c.instanceName)
+	}
+	log.Warnf("Zone unresolved for %q after a failed bulkInsert; attempting AggregatedList lookup to recover.", c.instanceName)
+	zone, err := c.discoverInstanceZone()
+	if err != nil {
+		// Only a successful lookup that found nothing means the instance is
+		// absent. A failed lookup (403, 5xx, transport) must not: treating
+		// it as not-found would let callers reap local state while the VM
+		// may still be running.
+		if !errors.Is(err, errInstanceNotPlaced) {
+			return fmt.Errorf("resolving zone to %s instance %q: %w", operation, c.instanceName, err)
+		}
+		log.Warnf("AggregatedList found no placed instance for %q; treating as not-found.", c.instanceName)
+		return &googleapi.Error{
+			Code:    http.StatusNotFound,
+			Message: fmt.Sprintf("instance %q has no resolved zone and was not found by AggregatedList; nothing to %s", c.instanceName, operation),
+		}
+	}
+	log.Infof("Recovered zone %q for %q via AggregatedList; proceeding with %s.", zone, c.instanceName, operation)
+	c.zone = zone
+	c.zoneURL = apiURL + c.project + "/zones/" + zone
+	if c.setResolvedZone != nil {
+		c.setResolvedZone(zone)
+	}
+	return nil
+}
+
 // deleteInstance deletes the instance, leaving the persistent disk.
-//
-// Recovers from the empty-zone state that bulkInsert can leave behind
-// when create fails after placement (e.g. VM_MIN_COUNT_NOT_REACHED):
-// without recovery, every subsequent delete would fail with "zone
-// unresolved" indefinitely, holding a goroutine and an idle slot per
-// stuck machine. Direct mode treats empty zone as a programming bug
-// worth surfacing, not a race to recover from.
 func (c *ComputeUtil) deleteInstance() error {
-	if c.zone == "" {
-		if !c.bulkInsert {
-			return fmt.Errorf("cannot delete instance %q: zone unresolved in direct mode (Driver.Zone should always be set from --google-zone here)", c.instanceName)
-		}
-		log.Warnf("Zone unresolved for %q after a failed bulkInsert; attempting AggregatedList lookup to recover.", c.instanceName)
-		zone, err := c.discoverInstanceZone()
-		if err != nil {
-			log.Warnf("AggregatedList lookup for %q did not find a placed instance (%v); treating as not-found so local state can be reaped.", c.instanceName, err)
-			return &googleapi.Error{
-				Code:    http.StatusNotFound,
-				Message: fmt.Sprintf("instance %q has no resolved zone and was not found by AggregatedList; nothing to delete", c.instanceName),
-			}
-		}
-		log.Infof("Recovered zone %q for %q via AggregatedList; proceeding with delete.", zone, c.instanceName)
-		c.zone = zone
-		c.zoneURL = apiURL + c.project + "/zones/" + zone
+	if err := c.ensureZone("delete"); err != nil {
+		return err
 	}
 
 	log.Infof("Deleting instance.")
@@ -685,8 +720,44 @@ func (c *ComputeUtil) deleteInstance() error {
 	return c.waitForRegionalOp(op.Name)
 }
 
+// updateInstanceLabels merges labels into the instance's current label
+// set. A concurrent label change loses the fingerprint race; the next
+// update repairs it.
+func (c *ComputeUtil) updateInstanceLabels(labels map[string]string) error {
+	if err := c.ensureZone("update-labels"); err != nil {
+		return err
+	}
+
+	instance, err := c.instance()
+	if err != nil {
+		return err
+	}
+
+	merged := map[string]string{}
+	for k, v := range instance.Labels {
+		merged[k] = v
+	}
+	for k, v := range labels {
+		merged[k] = v
+	}
+
+	op, err := c.service.Instances.SetLabels(c.project, c.zone, c.instanceName, &raw.InstancesSetLabelsRequest{
+		Labels:           merged,
+		LabelFingerprint: instance.LabelFingerprint,
+	}).Do()
+	if err != nil {
+		return err
+	}
+
+	return c.waitForRegionalOp(op.Name)
+}
+
 // stopInstance stops the instance.
 func (c *ComputeUtil) stopInstance() error {
+	if err := c.ensureZone("stop"); err != nil {
+		return err
+	}
+
 	op, err := c.service.Instances.Stop(c.project, c.zone, c.instanceName).Do()
 	if err != nil {
 		return err
@@ -698,6 +769,10 @@ func (c *ComputeUtil) stopInstance() error {
 
 // startInstance starts the instance.
 func (c *ComputeUtil) startInstance() error {
+	if err := c.ensureZone("start"); err != nil {
+		return err
+	}
+
 	op, err := c.service.Instances.Start(c.project, c.zone, c.instanceName).Do()
 	if err != nil {
 		return err
@@ -845,6 +920,10 @@ func (c *ComputeUtil) waitForGlobalOp(name string) error {
 
 // ip retrieves and returns the external IP address of the instance.
 func (c *ComputeUtil) ip() (string, error) {
+	if err := c.ensureZone("get the IP of"); err != nil {
+		return "", err
+	}
+
 	instance, err := c.service.Instances.Get(c.project, c.zone, c.instanceName).Do()
 	if err != nil {
 		return "", unwrapGoogleError(err)

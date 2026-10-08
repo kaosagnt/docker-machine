@@ -2,15 +2,17 @@ package localbinary
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"testing"
 	"time"
 
-	"os"
-
 	"github.com/docker/machine/libmachine/log"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type FakeExecutor struct {
@@ -156,4 +158,54 @@ func TestExecServer(t *testing.T) {
 	if err := <-finalErr; err != nil {
 		t.Fatalf("Error serving: %s", err)
 	}
+}
+
+func TestRelay(t *testing.T) {
+	lbp := &Plugin{MachineName: "m1"}
+
+	capture := func(format string, debug bool, fn func()) (string, string) {
+		require.NoError(t, log.SetFormat(format))
+		defer func() { require.NoError(t, log.SetFormat(log.FormatText)) }()
+		var out, errOut bytes.Buffer
+		log.SetDebug(debug)
+		log.SetOutWriter(&out)
+		log.SetErrWriter(&errOut)
+		fn()
+		return out.String(), errOut.String()
+	}
+
+	t.Run("text mode keeps the prefix", func(t *testing.T) {
+		out, _ := capture(log.FormatText, false, func() { lbp.relay("bulkInsert placed zone=us-east1-c", false) })
+		assert.Equal(t, "(m1) bulkInsert placed zone=us-east1-c\n", out)
+	})
+
+	t.Run("json mode re-attaches fields", func(t *testing.T) {
+		out, _ := capture(log.FormatJSON, false, func() {
+			lbp.relay(`{"time":"2026-09-08T14:38:50Z","level":"warn","msg":"bulkInsert placed","zone":"us-east1-c"}`, false)
+		})
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &entry))
+		assert.Equal(t, "bulkInsert placed", entry["msg"])
+		assert.Equal(t, "warn", entry["level"])
+		assert.Equal(t, "us-east1-c", entry["zone"])
+		assert.Equal(t, "m1", entry["machine"])
+		assert.NotEqual(t, "2026-09-08T14:38:50Z", entry["time"], "parent re-stamps")
+	})
+
+	t.Run("json mode falls back for plain lines", func(t *testing.T) {
+		out, _ := capture(log.FormatJSON, false, func() { lbp.relay("panic: boom", false) })
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal([]byte(out), &entry))
+		assert.Equal(t, "(m1) panic: boom", entry["msg"])
+	})
+
+	t.Run("stderr stays at debug", func(t *testing.T) {
+		_, errOut := capture(log.FormatJSON, true, func() {
+			lbp.relay(`{"level":"error","msg":"bad"}`, true)
+		})
+		var entry map[string]any
+		require.NoError(t, json.Unmarshal([]byte(errOut), &entry))
+		assert.Equal(t, "debug", entry["level"])
+		assert.Equal(t, "bad", entry["msg"])
+	})
 }

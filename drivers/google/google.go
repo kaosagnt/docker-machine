@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +19,16 @@ import (
 
 type metadataMap map[string]string
 
-const cosDockerNetworkReadinessMetadataKey = "gitlab-docker-network-readiness-gate"
+const cosWaitForCloudInitMetadataKey = "gitlab-wait-for-cloud-init"
+const cosDockerNetworkReadinessURLMetadataKey = "gitlab-docker-network-readiness-url"
+
+// Metadata keys for --google-cos-tls-via-metadata.
+const (
+	tlsCACertMetadataKey          = "gitlab-docker-tls-ca"
+	tlsServerCertMetadataKey      = "gitlab-docker-tls-cert"
+	tlsServerKeyMetadataKey       = "gitlab-docker-tls-key"
+	dockerDaemonDropinMetadataKey = "gitlab-docker-daemon-dropin"
+)
 
 type backoffFactory struct {
 	InitialInterval     time.Duration
@@ -42,33 +52,40 @@ func (bf *backoffFactory) create() *backoff.ExponentialBackOff {
 // Driver is a struct compatible with the docker.hosts.drivers.Driver interface.
 type Driver struct {
 	*drivers.BaseDriver
-	Zone                          string
-	MachineType                   string
-	MinCPUPlatform                string
-	MachineImage                  string
-	DiskType                      string
-	Address                       string
-	Network                       string
-	Subnetwork                    string
-	Preemptible                   bool
-	UseInternalIP                 bool
-	UseInternalIPOnly             bool
-	ServiceAccount                string
-	Scopes                        string
-	DiskSize                      int
-	ProvisionedIops               int
-	ProvisionedThroughput         int
-	Project                       string
-	Tags                          string
-	UseExisting                   bool
-	OpenPorts                     []string
-	Labels                        []string
-	Metadata                      metadataMap
-	MetadataFromFile              metadataMap
-	Accelerator                   string
-	MaintenancePolicy             string
-	SkipFirewall                  bool
-	COSDockerNetworkReadinessGate bool
+	Zone                         string
+	MachineType                  string
+	MinCPUPlatform               string
+	MachineImage                 string
+	DiskType                     string
+	Address                      string
+	Network                      string
+	Subnetwork                   string
+	Preemptible                  bool
+	UseInternalIP                bool
+	UseInternalIPOnly            bool
+	ServiceAccount               string
+	NoServiceAccount             bool
+	Scopes                       string
+	DiskSize                     int
+	ProvisionedIops              int
+	ProvisionedThroughput        int
+	Project                      string
+	Tags                         string
+	UseExisting                  bool
+	OpenPorts                    []string
+	Labels                       []string
+	Metadata                     metadataMap
+	MetadataFromFile             metadataMap
+	Accelerator                  string
+	MaintenancePolicy            string
+	SkipFirewall                 bool
+	COSWaitForCloudInit          bool
+	COSDockerNetworkReadinessURL string
+
+	COSTLSViaMetadata bool
+	// tlsBootstrap is not persisted. It only lives from SetTLSBootstrap to
+	// Create, in the plugin process.
+	tlsBootstrap *drivers.TLSBootstrap
 
 	// BulkInsert is the explicit opt-in for bulkInsert mode. Separate
 	// boolean rather than inferred from Region: keeps the provisioning
@@ -83,6 +100,14 @@ type Driver struct {
 	// FlexSelections feeds InstanceFlexibilityPolicy.InstanceSelections.
 	// First entry = rank 0; format documented on --google-flex-selection.
 	FlexSelections []string
+
+	// FlexStockoutCooldown temporarily deprioritizes a flex selection after a
+	// recognized capacity failure. Zero preserves the configured order.
+	FlexStockoutCooldown time.Duration
+	// FlexStockoutProbeLease limits priority recovery probes across concurrent
+	// docker-machine command processes sharing StorePath. Other creates may
+	// still reach the selection after exhausting non-cooling alternatives.
+	FlexStockoutProbeLease time.Duration
 
 	// LocationZones constrains zone selection. Each entry is
 	// "zone[:PREFERENCE]" (ALLOW / DENY); empty means GCP picks any
@@ -105,19 +130,20 @@ type Driver struct {
 }
 
 const (
-	defaultZone              = "us-central1-a"
-	defaultUser              = "ubuntu"
-	defaultMachineType       = "n1-standard-1"
-	defaultImageName         = "ubuntu-os-cloud/global/images/ubuntu-2204-jammy-v20250815"
-	defaultServiceAccount    = "default"
-	defaultScopes            = "https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
-	defaultDiskType          = "pd-standard"
-	defaultDiskSize          = 10
-	defaultNetwork           = "default"
-	defaultSubnetwork        = ""
-	defaultMinCPUPlatform    = ""
-	defaultAccelerator       = ""
-	defaultMaintenancePolicy = ""
+	defaultZone                   = "us-central1-a"
+	defaultUser                   = "ubuntu"
+	defaultMachineType            = "n1-standard-1"
+	defaultImageName              = "ubuntu-os-cloud/global/images/ubuntu-2204-jammy-v20250815"
+	defaultServiceAccount         = "default"
+	defaultScopes                 = "https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write"
+	defaultDiskType               = "pd-standard"
+	defaultDiskSize               = 10
+	defaultNetwork                = "default"
+	defaultSubnetwork             = ""
+	defaultMinCPUPlatform         = ""
+	defaultAccelerator            = ""
+	defaultMaintenancePolicy      = ""
+	defaultFlexStockoutProbeLease = 5 * time.Minute
 
 	defaultGoogleOperationBackoffInitialInterval     = 1
 	defaultGoogleOperationBackoffRandomizationFactor = "0.5"
@@ -170,6 +196,11 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "GCE Service Account for the VM (email address)",
 			Value:  defaultServiceAccount,
 			EnvVar: "GOOGLE_SERVICE_ACCOUNT",
+		},
+		mcnflag.BoolFlag{
+			Name:   "google-no-service-account",
+			Usage:  "Attach no service account to the VM, so the metadata server serves no access token. Overrides --google-service-account and --google-scopes.",
+			EnvVar: "GOOGLE_NO_SERVICE_ACCOUNT",
 		},
 		mcnflag.StringFlag{
 			Name:   "google-scopes",
@@ -301,9 +332,24 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			EnvVar: "GOOGLE_SKIP_FIREWALL_CREATE",
 		},
 		mcnflag.BoolFlag{
+			Name:   "google-cos-wait-for-cloud-init",
+			Usage:  "Wait for cloud-init to finish before configuring Docker on a Google COS machine",
+			EnvVar: "GOOGLE_COS_WAIT_FOR_CLOUD_INIT",
+		},
+		mcnflag.BoolFlag{
 			Name:   "google-cos-docker-network-readiness-gate",
-			Usage:  "Wait for cloud-init and verify Docker bridge networking before marking a Google COS machine ready",
+			Usage:  "Deprecated: use --google-cos-wait-for-cloud-init",
 			EnvVar: "GOOGLE_COS_DOCKER_NETWORK_READINESS_GATE",
+		},
+		mcnflag.StringFlag{
+			Name:   "google-cos-docker-network-readiness-url",
+			Usage:  "If set, verify container egress on a Google COS machine by fetching this URL from a probe container before marking the machine ready. Independent of --google-cos-wait-for-cloud-init.",
+			EnvVar: "GOOGLE_COS_DOCKER_NETWORK_READINESS_URL",
+		},
+		mcnflag.BoolFlag{
+			Name:   "google-cos-tls-via-metadata",
+			Usage:  "Deliver the Docker TLS certificates and daemon drop-in as instance metadata (" + tlsCACertMetadataKey + ", " + tlsServerCertMetadataKey + ", " + tlsServerKeyMetadataKey + ", " + dockerDaemonDropinMetadataKey + ") instead of provisioning over SSH. The image has to install them itself before starting dockerd on port 2376; docker-machine waits for the Docker API to answer over TLS and does not SSH into the machine during create. The server certificate is issued for the machine name, so clients have to verify against it.",
+			EnvVar: "GOOGLE_COS_TLS_VIA_METADATA",
 		},
 		mcnflag.BoolFlag{
 			Name:   "google-bulk-insert",
@@ -319,6 +365,18 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Name:   "google-flex-selection",
 			Usage:  "(Experimental) Candidate machine-type / disk spec for bulkInsert. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput override the boot disk for this entry. Repeat in preference order: first occurrence is tried first, subsequent entries are tried only if the previous one fails with a stockout-class error. Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Optional in bulkInsert mode: when omitted, a single selection is synthesised from --google-machine-type and --google-disk-type.",
 			EnvVar: "GOOGLE_FLEX_SELECTION",
+		},
+		mcnflag.StringFlag{
+			Name:   "google-flex-stockout-cooldown",
+			Usage:  "Temporarily try flex selections with recent stockout-class failures after other selections (0s disables).",
+			EnvVar: "GOOGLE_FLEX_STOCKOUT_COOLDOWN",
+			Value:  "0s",
+		},
+		mcnflag.StringFlag{
+			Name:   "google-flex-stockout-probe-lease",
+			Usage:  "Lease duration that permits one process to probe a flex selection after its stockout cooldown expires.",
+			EnvVar: "GOOGLE_FLEX_STOCKOUT_PROBE_LEASE",
+			Value:  defaultFlexStockoutProbeLease.String(),
 		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-location-zone",
@@ -400,14 +458,28 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		d.UseInternalIP = flags.Bool("google-use-internal-ip") || flags.Bool("google-use-internal-ip-only")
 		d.UseInternalIPOnly = flags.Bool("google-use-internal-ip-only")
 		d.ServiceAccount = flags.String("google-service-account")
+		d.NoServiceAccount = flags.Bool("google-no-service-account")
 		d.Scopes = flags.String("google-scopes")
+		if d.NoServiceAccount && (d.ServiceAccount != defaultServiceAccount || d.Scopes != defaultScopes) {
+			log.Warn("--google-no-service-account is set, ignoring --google-service-account and --google-scopes")
+		}
 		d.Tags = flags.String("google-tags")
 		d.OpenPorts = flags.StringSlice("google-open-port")
 		d.Labels = flags.StringSlice("google-label")
 		d.Metadata = metadataMapFromStringSlice(flags.StringSlice("google-metadata"))
-		d.COSDockerNetworkReadinessGate = flags.Bool("google-cos-docker-network-readiness-gate")
-		if d.COSDockerNetworkReadinessGate {
-			d.Metadata[cosDockerNetworkReadinessMetadataKey] = "true"
+		if flags.Bool("google-cos-docker-network-readiness-gate") {
+			log.Warn("--google-cos-docker-network-readiness-gate is deprecated, use --google-cos-wait-for-cloud-init")
+		}
+		d.COSWaitForCloudInit = flags.Bool("google-cos-wait-for-cloud-init") || flags.Bool("google-cos-docker-network-readiness-gate")
+		if d.COSWaitForCloudInit {
+			d.Metadata[cosWaitForCloudInitMetadataKey] = "true"
+		}
+		d.COSDockerNetworkReadinessURL = flags.String("google-cos-docker-network-readiness-url")
+		if d.COSDockerNetworkReadinessURL != "" {
+			if err := validateReadinessURL(d.COSDockerNetworkReadinessURL); err != nil {
+				return err
+			}
+			d.Metadata[cosDockerNetworkReadinessURLMetadataKey] = d.COSDockerNetworkReadinessURL
 		}
 		d.MetadataFromFile = metadataMapFromStringSlice(flags.StringSlice("google-metadata-from-file"))
 		d.Accelerator = flags.String("google-accelerator")
@@ -422,6 +494,32 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.Region = flags.String("google-region")
 	d.FlexSelections = flags.StringSlice("google-flex-selection")
 	d.LocationZones = flags.StringSlice("google-location-zone")
+	var err error
+	d.FlexStockoutCooldown, err = time.ParseDuration(flags.String("google-flex-stockout-cooldown"))
+	if err != nil {
+		return fmt.Errorf("invalid google-flex-stockout-cooldown: %w", err)
+	}
+	if d.FlexStockoutCooldown < 0 {
+		return fmt.Errorf("google-flex-stockout-cooldown must be >= 0, got %s", d.FlexStockoutCooldown)
+	}
+	d.FlexStockoutProbeLease, err = time.ParseDuration(flags.String("google-flex-stockout-probe-lease"))
+	if err != nil {
+		return fmt.Errorf("invalid google-flex-stockout-probe-lease: %w", err)
+	}
+	if d.FlexStockoutProbeLease < 0 {
+		return fmt.Errorf("google-flex-stockout-probe-lease must be >= 0, got %s", d.FlexStockoutProbeLease)
+	}
+	if d.FlexStockoutCooldown > 0 && d.FlexStockoutProbeLease == 0 {
+		return fmt.Errorf("google-flex-stockout-probe-lease must be > 0 when stockout cooldown is enabled, got %s", d.FlexStockoutProbeLease)
+	}
+
+	d.COSTLSViaMetadata = flags.Bool("google-cos-tls-via-metadata")
+	if d.COSTLSViaMetadata && d.UseExisting {
+		return errors.New("--google-cos-tls-via-metadata and --google-use-existing are mutually exclusive: the TLS material is attached when the instance is inserted")
+	}
+	if d.COSTLSViaMetadata && (d.COSWaitForCloudInit || d.COSDockerNetworkReadinessURL != "") {
+		log.Warn("--google-cos-tls-via-metadata skips the SSH provisioner; --google-cos-wait-for-cloud-init and the readiness URL are not checked")
+	}
 
 	if d.BulkInsert {
 		if d.UseExisting {
@@ -466,6 +564,12 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 			return errors.New("--google-location-zone requires --google-bulk-insert")
 		}
 	}
+	if !d.BulkInsert && d.FlexStockoutCooldown > 0 {
+		return errors.New("--google-flex-stockout-cooldown requires --google-bulk-insert")
+	}
+	if !d.BulkInsert && d.FlexStockoutProbeLease != defaultFlexStockoutProbeLease {
+		return errors.New("--google-flex-stockout-probe-lease requires --google-bulk-insert")
+	}
 
 	backoffRandomizationFactor, err := strconv.ParseFloat(flags.String("google-operation-backoff-randomization-factor"), 64)
 	if err != nil {
@@ -484,6 +588,9 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 		MaxInterval:         time.Duration(flags.Int("google-operation-backoff-max-interval")) * time.Second,
 		MaxElapsedTime:      time.Duration(flags.Int("google-operation-backoff-max-elapsed-time")) * time.Second,
 	}
+	if d.FlexStockoutCooldown > 0 && d.FlexStockoutProbeLease < d.OperationBackoffFactory.MaxElapsedTime {
+		return fmt.Errorf("google-flex-stockout-probe-lease (%s) must be >= google-operation-backoff-max-elapsed-time (%s)", d.FlexStockoutProbeLease, d.OperationBackoffFactory.MaxElapsedTime)
+	}
 
 	return nil
 }
@@ -499,6 +606,20 @@ func metadataMapFromStringSlice(slice []string) metadataMap {
 	}
 
 	return result
+}
+
+func validateReadinessURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid google-cos-docker-network-readiness-url %q: %w", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("google-cos-docker-network-readiness-url %q must be an http or https URL", raw)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("google-cos-docker-network-readiness-url %q must include a host", raw)
+	}
+	return nil
 }
 
 // PreCreateCheck is called to enforce pre-creation steps
@@ -518,24 +639,55 @@ func (d *Driver) PreCreateCheck() error {
 
 	// Check if the instance already exists. There will be an error if the instance
 	// doesn't exist, so just check instance for nil.
-	log.Infof("Check if the instance already exists")
+	//
+	// Skipped when no zone is resolved yet, which only happens on a
+	// bulk-mode first attempt: the lookup never found anything there (it
+	// used to 400 on the empty zone, and with zone recovery it would cost
+	// an AggregatedList per create). A bulk retry after successful
+	// placement has ResolvedZone persisted and keeps the duplicate
+	// protection via a cheap zonal lookup. Direct mode, including
+	// UseExisting, always has a zone.
+	if effectiveZone(d) != "" {
+		log.Infof("Check if the instance already exists")
 
-	instance, _ := c.instance()
-	if d.UseExisting {
-		if instance == nil {
-			return fmt.Errorf("unable to find instance %q in zone %q", d.MachineName, d.Zone)
-		}
-	} else {
-		if instance != nil {
-			return fmt.Errorf("instance %q already exists in zone %q", d.MachineName, d.Zone)
+		instance, _ := c.instance()
+		if d.UseExisting {
+			if instance == nil {
+				return fmt.Errorf("unable to find instance %q in zone %q", d.MachineName, d.Zone)
+			}
+		} else {
+			if instance != nil {
+				return fmt.Errorf("instance %q already exists in zone %q", d.MachineName, d.Zone)
+			}
 		}
 	}
 
 	return nil
 }
 
+// TLSBootstrapRequested implements drivers.TLSBootstrapper.
+func (d *Driver) TLSBootstrapRequested() (bool, error) {
+	return d.COSTLSViaMetadata, nil
+}
+
+// SetTLSBootstrap implements drivers.TLSBootstrapper.
+func (d *Driver) SetTLSBootstrap(b drivers.TLSBootstrap) error {
+	if !d.COSTLSViaMetadata {
+		return errors.New("TLS bootstrap given without --google-cos-tls-via-metadata")
+	}
+	if len(b.CACert) == 0 || len(b.ServerCert) == 0 || len(b.ServerKey) == 0 || len(b.DaemonDropin) == 0 {
+		return errors.New("TLS bootstrap is incomplete: CA certificate, server certificate, server key and daemon drop-in are all required")
+	}
+	d.tlsBootstrap = &b
+	return nil
+}
+
 // Create creates a GCE VM instance acting as a docker host.
 func (d *Driver) Create() error {
+	if d.COSTLSViaMetadata && d.tlsBootstrap == nil {
+		return errors.New("--google-cos-tls-via-metadata is set but no TLS bootstrap was provided before Create")
+	}
+
 	log.Infof("Generating SSH Key")
 
 	if err := ssh.GenerateSSHKey(d.GetSSHKeyPath()); err != nil {
@@ -600,11 +752,23 @@ func (d *Driver) GetState() (state.State, error) {
 		return state.None, err
 	}
 
-	// All we care about is whether the disk exists, so we just check disk for a nil value.
-	// There will be no error if disk is not nil.
-	instance, _ := c.instance()
+	return getState(c)
+}
+
+// getState maps the instance (or, for a stopped-and-deleted instance, its
+// leftover disk) to a machine state. Only a genuine not-found means absent:
+// other lookup failures propagate, because state.None tells callers to reap
+// local state while the VM may still be running.
+func getState(c *ComputeUtil) (state.State, error) {
+	instance, err := c.instance()
+	if err != nil && !isNotFound(err) {
+		return state.None, err
+	}
 	if instance == nil {
-		disk, _ := c.disk()
+		disk, derr := c.disk()
+		if derr != nil && !isNotFound(derr) {
+			return state.None, derr
+		}
 		if disk == nil {
 			return state.None, nil
 		}
@@ -637,10 +801,8 @@ func (d *Driver) Start() error {
 	}
 
 	if instance == nil {
-		// bulkInsert can't reuse the existing disk: a fresh BulkInsert
-		// picks a new zone and builds a new disk, orphaning the old one.
-		if d.BulkInsert {
-			return fmt.Errorf("instance %q not found and --google-bulk-insert mode does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
+		if err := d.recreateFromDiskSupported(); err != nil {
+			return err
 		}
 		if err = c.createInstance(d); err != nil {
 			return err
@@ -653,6 +815,23 @@ func (d *Driver) Start() error {
 
 	d.IPAddress, err = d.GetIP()
 	return err
+}
+
+// recreateFromDiskSupported reports whether Start may insert a new instance
+// on the existing disk when the instance record is gone.
+func (d *Driver) recreateFromDiskSupported() error {
+	// bulkInsert can't reuse the existing disk: a fresh BulkInsert
+	// picks a new zone and builds a new disk, orphaning the old one.
+	if d.BulkInsert {
+		return fmt.Errorf("instance %q not found and --google-bulk-insert mode does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
+	}
+	// The TLS material is only attached to the original insert, and COS
+	// keeps /etc on a tmpfs overlay, so a new instance on the old disk
+	// would boot without it.
+	if d.COSTLSViaMetadata {
+		return fmt.Errorf("instance %q not found and --google-cos-tls-via-metadata does not support resurrecting from an existing disk; re-create the machine", d.MachineName)
+	}
+	return nil
 }
 
 // Stop stops an existing GCE instance.
@@ -682,6 +861,15 @@ func (d *Driver) Restart() error {
 // Kill stops an existing GCE instance.
 func (d *Driver) Kill() error {
 	return d.Stop()
+}
+
+func (d *Driver) UpdateLabels(labels map[string]string) error {
+	c, err := newComputeUtil(d)
+	if err != nil {
+		return err
+	}
+
+	return c.updateInstanceLabels(labels)
 }
 
 // Remove deletes the GCE instance and the disk.

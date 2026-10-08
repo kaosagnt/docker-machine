@@ -2,6 +2,7 @@ package google
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,16 +10,28 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/docker/machine/libmachine/drivers"
+	"github.com/docker/machine/libmachine/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	raw "google.golang.org/api/compute/v1"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
+
+func TestServiceAccounts(t *testing.T) {
+	d := &Driver{ServiceAccount: "sa@p.iam.gserviceaccount.com", Scopes: "a,b"}
+	assert.Equal(t, []*raw.ServiceAccount{{Email: "sa@p.iam.gserviceaccount.com", Scopes: []string{"a", "b"}}}, serviceAccounts(d))
+
+	d.NoServiceAccount = true
+	assert.Nil(t, serviceAccounts(d))
+}
 
 func TestDefaultTag(t *testing.T) {
 	tags := parseTags(&Driver{Tags: ""})
@@ -323,19 +336,43 @@ func TestPrepareMetadata(t *testing.T) {
 	missingMetadataFilePath := func(_ *testing.T) (metadataMap, func()) {
 		return metadataMap{"non-existing": ""}, func() {}
 	}
+	sshKeyValue := "cos:ssh-rsa AAAA cos cos\n"
 	emptyMetadata := func(t *testing.T, m *raw.Metadata) {
 		if !assert.NotNil(t, m) {
 			t.FailNow()
 		}
-		assert.Empty(t, m.Items)
+		assert.Len(t, m.Items, 2)
+		assertMetadata(t, m, "ssh-keys", sshKeyValue)
+		assertMetadata(t, m, "sshKeys", sshKeyValue)
+	}
+
+	tlsBootstrap := &drivers.TLSBootstrap{
+		CACert:       []byte("ca"),
+		ServerCert:   []byte("cert"),
+		ServerKey:    []byte("key"),
+		DaemonDropin: []byte("[Service]\nExecStart=dockerd"),
 	}
 
 	tests := map[string]struct {
 		metadata       metadataMap
 		metadataFiles  func(t *testing.T) (metadataMap, func())
+		tlsBootstrap   *drivers.TLSBootstrap
 		expectedError  bool
 		assertMetadata func(t *testing.T, m *raw.Metadata)
 	}{
+		"tls bootstrap attached": {
+			metadata:      metadata,
+			metadataFiles: noMetadataFile,
+			tlsBootstrap:  tlsBootstrap,
+			assertMetadata: func(t *testing.T, m *raw.Metadata) {
+				assertMetadata(t, m, metadataKey1, metadataValue1)
+				assertMetadata(t, m, "ssh-keys", sshKeyValue)
+				assertMetadata(t, m, tlsCACertMetadataKey, "ca")
+				assertMetadata(t, m, tlsServerCertMetadataKey, "cert")
+				assertMetadata(t, m, tlsServerKeyMetadataKey, "key")
+				assertMetadata(t, m, dockerDaemonDropinMetadataKey, "[Service]\nExecStart=dockerd")
+			},
+		},
 		"error on metadata file reading": {
 			metadataFiles:  failingMetadataFile,
 			expectedError:  true,
@@ -393,10 +430,14 @@ func TestPrepareMetadata(t *testing.T) {
 			metadataFiles, cleanup := tt.metadataFiles(t)
 			defer cleanup()
 
-			metadata, err := prepareMetadata(&Driver{
+			d := withSSHKey(t, &Driver{
 				Metadata:         tt.metadata,
 				MetadataFromFile: metadataFiles,
+				tlsBootstrap:     tt.tlsBootstrap,
 			})
+
+			c := &ComputeUtil{userName: "cos"}
+			metadata, err := c.prepareMetadata(d)
 
 			if tt.expectedError {
 				assert.Error(t, err)
@@ -407,6 +448,18 @@ func TestPrepareMetadata(t *testing.T) {
 			tt.assertMetadata(t, metadata)
 		})
 	}
+}
+
+// withSSHKey gives the driver a store with a public key.
+func withSSHKey(t *testing.T, d *Driver) *Driver {
+	d.BaseDriver = &drivers.BaseDriver{MachineName: "m", StorePath: t.TempDir()}
+	writeSSHKey(t, d)
+	return d
+}
+
+func writeSSHKey(t *testing.T, d *Driver) {
+	require.NoError(t, os.MkdirAll(filepath.Dir(d.GetSSHKeyPath()), 0o700))
+	require.NoError(t, os.WriteFile(d.GetSSHKeyPath()+".pub", []byte("ssh-rsa AAAA cos\n"), 0o600))
 }
 
 func assertMetadata(t *testing.T, m *raw.Metadata, key string, value string) {
@@ -627,37 +680,41 @@ func TestDeleteInstance_RecoversZoneViaAggregatedList(t *testing.T) {
 	assert.Contains(t, c.zoneURL, "/zones/us-east1-c")
 }
 
-func TestDeleteInstance_UnresolvedZoneReturns404(t *testing.T) {
-	tests := map[string]http.HandlerFunc{
-		"aggregated list returns empty": func(w http.ResponseWriter, r *http.Request) {
-			if !strings.Contains(r.URL.Path, "/aggregated/instances") {
-				t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
-			}
-			resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
-			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
-			fmt.Fprint(w, body)
-		},
-		"aggregated list returns HTTP 403": func(w http.ResponseWriter, r *http.Request) {
-			if !strings.Contains(r.URL.Path, "/aggregated/instances") {
-				t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
-			}
-			http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
-		},
-	}
+func TestDeleteInstance_NeverPlacedReturns404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+			t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
+		}
+		resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
 
-	for tn, handler := range tests {
-		t.Run(tn, func(t *testing.T) {
-			srv := httptest.NewServer(handler)
-			defer srv.Close()
+	c := newUnresolvedZoneComputeUtil(t, srv)
 
-			c := newUnresolvedZoneComputeUtil(t, srv)
+	err := c.deleteInstance()
 
-			err := c.deleteInstance()
+	require.Error(t, err)
+	assert.True(t, isNotFound(err), "got %T: %v", err, err)
+}
 
-			require.Error(t, err)
-			assert.True(t, isNotFound(err), "got %T: %v", err, err)
-		})
-	}
+func TestDeleteInstance_LookupFailurePropagates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+			t.Fatalf("unexpected call to %s; lookup failure must not reach the delete", r.URL.Path)
+		}
+		http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+
+	err := c.deleteInstance()
+
+	require.Error(t, err)
+	assert.False(t, isNotFound(err), "a failed lookup must not be treated as absent: %v", err)
+	assert.Contains(t, err.Error(), "403")
 }
 
 func TestDeleteInstance_DirectModeUnresolvedZoneReturnsError(t *testing.T) {
@@ -672,4 +729,252 @@ func TestDeleteInstance_DirectModeUnresolvedZoneReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, isNotFound(err), "direct mode must not synthesise a 404")
 	assert.Contains(t, err.Error(), "direct mode")
+}
+
+type zoneRecoveryOperation struct {
+	run        func(c *ComputeUtil) error
+	wantMethod string
+	wantPath   string
+}
+
+func zoneRecoveryOperations() map[string]zoneRecoveryOperation {
+	return map[string]zoneRecoveryOperation{
+		"stop": {
+			run:        func(c *ComputeUtil) error { return c.stopInstance() },
+			wantMethod: http.MethodPost,
+			wantPath:   "/projects/p/zones/us-east1-c/instances/runner-abc/stop",
+		},
+		"start": {
+			run:        func(c *ComputeUtil) error { return c.startInstance() },
+			wantMethod: http.MethodPost,
+			wantPath:   "/projects/p/zones/us-east1-c/instances/runner-abc/start",
+		},
+		"inspect": {
+			run: func(c *ComputeUtil) error {
+				_, err := c.instance()
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/projects/p/zones/us-east1-c/instances/runner-abc",
+		},
+		"ip": {
+			run: func(c *ComputeUtil) error {
+				_, err := c.ip()
+				return err
+			},
+			wantMethod: http.MethodGet,
+			wantPath:   "/projects/p/zones/us-east1-c/instances/runner-abc",
+		},
+	}
+}
+
+func TestZoneRecovery_StopStartInspectTargetRecoveredZone(t *testing.T) {
+	for tn, operation := range zoneRecoveryOperations() {
+		t.Run(tn, func(t *testing.T) {
+			var mu sync.Mutex
+			var calls []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				calls = append(calls, r.Method+" "+r.URL.Path)
+				mu.Unlock()
+
+				if strings.Contains(r.URL.Path, "/aggregated/instances") {
+					resp := raw.InstanceAggregatedList{
+						Items: map[string]raw.InstancesScopedList{
+							"zones/us-east1-c": {
+								Instances: []*raw.Instance{
+									{
+										Name: "runner-abc",
+										Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
+									},
+								},
+							},
+						},
+					}
+					body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+					fmt.Fprint(w, body)
+					return
+				}
+				if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/instances/runner-abc") {
+					body, _ := googleapi.WithoutDataWrapper.JSONReader(raw.Instance{
+						Name: "runner-abc",
+						NetworkInterfaces: []*raw.NetworkInterface{
+							{
+								NetworkIP:     "10.0.0.2",
+								AccessConfigs: []*raw.AccessConfig{{NatIP: "203.0.113.7"}},
+							},
+						},
+					})
+					fmt.Fprint(w, body)
+					return
+				}
+				op := raw.Operation{Name: "op-1", Status: "DONE"}
+				body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+				fmt.Fprint(w, body)
+			}))
+			defer srv.Close()
+
+			c := newUnresolvedZoneComputeUtil(t, srv)
+
+			require.NoError(t, operation.run(c))
+			assert.Equal(t, "us-east1-c", c.zone)
+
+			mu.Lock()
+			defer mu.Unlock()
+			assert.Contains(t, calls, operation.wantMethod+" "+operation.wantPath)
+		})
+	}
+}
+
+func TestZoneRecovery_StopStartInspectNeverPlacedReturnsNotFound(t *testing.T) {
+	for tn, operation := range zoneRecoveryOperations() {
+		t.Run(tn, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.Contains(r.URL.Path, "/aggregated/instances") {
+					t.Fatalf("unexpected call to %s; should have short-circuited via 404", r.URL.Path)
+				}
+				resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
+				body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+				fmt.Fprint(w, body)
+			}))
+			defer srv.Close()
+
+			c := newUnresolvedZoneComputeUtil(t, srv)
+
+			err := operation.run(c)
+
+			require.Error(t, err)
+			assert.True(t, isNotFound(err), "got %T: %v", err, err)
+		})
+	}
+}
+
+func TestZoneRecovery_StopStartInspectLookupFailurePropagates(t *testing.T) {
+	for tn, operation := range zoneRecoveryOperations() {
+		t.Run(tn, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
+			}))
+			defer srv.Close()
+
+			c := newUnresolvedZoneComputeUtil(t, srv)
+
+			err := operation.run(c)
+
+			require.Error(t, err)
+			assert.False(t, isNotFound(err), "a failed lookup must not be treated as absent: %v", err)
+			assert.Contains(t, err.Error(), "403")
+		})
+	}
+}
+
+func TestZoneRecovery_WritesZoneBackToDriver(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/aggregated/instances") {
+			resp := raw.InstanceAggregatedList{
+				Items: map[string]raw.InstancesScopedList{
+					"zones/us-east1-c": {
+						Instances: []*raw.Instance{
+							{
+								Name: "runner-abc",
+								Zone: "https://www.googleapis.com/compute/v1/projects/p/zones/us-east1-c",
+							},
+						},
+					},
+				},
+			}
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+			fmt.Fprint(w, body)
+			return
+		}
+		op := raw.Operation{Name: "op-1", Status: "DONE"}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	var resolved string
+	c := newUnresolvedZoneComputeUtil(t, srv)
+	c.setResolvedZone = func(z string) { resolved = z }
+
+	require.NoError(t, c.stopInstance())
+	assert.Equal(t, "us-east1-c", resolved)
+}
+
+func TestGetState_LookupFailureIsNotAbsence(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":{"code":403,"message":"synthetic forbidden"}}`, http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+
+	st, err := getState(c)
+
+	require.Error(t, err)
+	assert.Equal(t, state.None, st)
+	assert.Contains(t, err.Error(), "403")
+}
+
+func TestGetState_NeverPlacedWithoutDiskIsNone(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/aggregated/instances") {
+			resp := raw.InstanceAggregatedList{Items: map[string]raw.InstancesScopedList{}}
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(resp)
+			fmt.Fprint(w, body)
+			return
+		}
+		// Disk lookup: a genuine 404.
+		http.Error(w, `{"error":{"code":404,"message":"not found"}}`, http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+
+	st, err := getState(c)
+
+	require.NoError(t, err)
+	assert.Equal(t, state.None, st)
+}
+
+func TestUpdateInstanceLabels_MergesAndKeepsFingerprint(t *testing.T) {
+	var setLabelsReq *raw.InstancesSetLabelsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/instances/runner-abc"):
+			_ = json.NewEncoder(w).Encode(raw.Instance{
+				Name:             "runner-abc",
+				LabelFingerprint: "fp-1",
+				Labels: map[string]string{
+					"gl_resource_type":         "ci_ephemeral",
+					"runner_manager_heartbeat": "100",
+				},
+			})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/instances/runner-abc/setLabels"):
+			setLabelsReq = &raw.InstancesSetLabelsRequest{}
+			_ = json.NewDecoder(r.Body).Decode(setLabelsReq)
+			_ = json.NewEncoder(w).Encode(raw.Operation{Name: "op-1", Status: "DONE"})
+		case strings.Contains(r.URL.Path, "/operations/"):
+			_ = json.NewEncoder(w).Encode(raw.Operation{Name: "op-1", Status: "DONE"})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := newUnresolvedZoneComputeUtil(t, srv)
+	c.bulkInsert = false
+	c.zone = "us-east1-c"
+
+	err := c.updateInstanceLabels(map[string]string{"runner_manager_heartbeat": "200"})
+	assert.NoError(t, err)
+
+	require.NotNil(t, setLabelsReq)
+	assert.Equal(t, "fp-1", setLabelsReq.LabelFingerprint)
+	assert.Equal(t, map[string]string{
+		"gl_resource_type":         "ci_ephemeral",
+		"runner_manager_heartbeat": "200",
+	}, setLabelsReq.Labels)
 }

@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/machine/libmachine/log"
 	"github.com/docker/machine/libmachine/mcnutils"
@@ -19,7 +21,9 @@ import (
 )
 
 type Client interface {
-	Output(command string) (string, error)
+	// Output runs command and returns its combined output. It stops when ctx
+	// ends.
+	Output(ctx context.Context, command string) (string, error)
 	Shell(args ...string) error
 
 	// Start starts the specified command without waiting for it to finish. You
@@ -58,6 +62,9 @@ type ClientType string
 
 const (
 	maxDialAttempts = 10
+
+	// In case something other than ssh holds its output pipes.
+	externalCancelWaitDelay = 5 * time.Second
 )
 
 const (
@@ -184,17 +191,34 @@ func (client *NativeClient) session(command string) (*ssh.Client, *ssh.Session, 
 	return conn, session, err
 }
 
-func (client *NativeClient) Output(command string) (string, error) {
-	conn, session, err := client.session(command)
+// Output dials once; callers retry.
+func (client *NativeClient) Output(ctx context.Context, command string) (string, error) {
+	addr := net.JoinHostPort(client.Hostname, strconv.Itoa(client.Port))
+
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return "", err
+		return "", contextErr(ctx, err)
 	}
-	defer closeConn(conn)
+	defer func() { _ = conn.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, &client.Config)
+	if err != nil {
+		return "", contextErr(ctx, err)
+	}
+	sshClient := ssh.NewClient(c, chans, reqs)
+	defer closeConn(sshClient)
+
+	session, err := sshClient.NewSession()
+	if err != nil {
+		return "", contextErr(ctx, err)
+	}
 	defer session.Close()
 
 	output, err := session.CombinedOutput(command)
-
-	return string(output), err
+	return string(output), contextErr(ctx, err)
 }
 
 func (client *NativeClient) OutputWithPty(command string) (string, error) {
@@ -384,11 +408,15 @@ func getSSHCmd(binaryPath string, args ...string) *exec.Cmd {
 	return exec.Command(binaryPath, args...)
 }
 
-func (client *ExternalClient) Output(command string) (string, error) {
-	args := append(client.BaseArgs, command)
-	cmd := getSSHCmd(client.BinaryPath, args...)
+func (client *ExternalClient) Output(ctx context.Context, command string) (string, error) {
+	// Appending to BaseArgs could write into its spare capacity.
+	args := make([]string, 0, len(client.BaseArgs)+1)
+	args = append(append(args, client.BaseArgs...), command)
+
+	cmd := exec.CommandContext(ctx, client.BinaryPath, args...)
+	cmd.WaitDelay = externalCancelWaitDelay
 	output, err := cmd.CombinedOutput()
-	return string(output), err
+	return string(output), contextErr(ctx, err)
 }
 
 func (client *ExternalClient) Shell(args ...string) error {
@@ -439,6 +467,14 @@ func (client *ExternalClient) Wait() error {
 	err := client.cmd.Wait()
 	client.cmd = nil
 	return err
+}
+
+// contextErr lets callers tell a deadline from a transport failure.
+func contextErr(ctx context.Context, err error) error {
+	if err == nil || ctx.Err() == nil {
+		return err
+	}
+	return fmt.Errorf("%w (%v)", ctx.Err(), err)
 }
 
 func closeConn(c io.Closer) {

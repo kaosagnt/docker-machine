@@ -1,6 +1,9 @@
 package sshtest
 
-import "io"
+import (
+	"context"
+	"io"
+)
 
 type CmdResult struct {
 	Out string
@@ -12,7 +15,7 @@ type FakeClient struct {
 	Outputs        map[string]CmdResult
 }
 
-func (fsc *FakeClient) Output(command string) (string, error) {
+func (fsc *FakeClient) Output(ctx context.Context, command string) (string, error) {
 	outerr := fsc.Outputs[command]
 	return outerr.Out, outerr.Err
 }

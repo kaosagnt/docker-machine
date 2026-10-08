@@ -2,6 +2,7 @@ package google
 
 import (
 	"testing"
+	"time"
 
 	"github.com/docker/machine/libmachine/drivers"
 	"github.com/stretchr/testify/assert"
@@ -24,17 +25,157 @@ func TestSetConfigFromFlags(t *testing.T) {
 	assert.Empty(t, checkFlags.InvalidFlags)
 }
 
-func TestSetConfigFromFlags_COSDockerNetworkReadinessGate(t *testing.T) {
+func TestSetConfigFromFlags_FlexStockoutCooldown(t *testing.T) {
 	tests := map[string]struct {
-		enabled          bool
+		cooldown      string
+		probeLease    string
+		expected      time.Duration
+		expectedProbe time.Duration
+		expectErr     string
+	}{
+		"disabled by default": {expectedProbe: defaultFlexStockoutProbeLease},
+		"durations are stored": {
+			cooldown:      "2m",
+			probeLease:    "5m",
+			expected:      2 * time.Minute,
+			expectedProbe: defaultFlexStockoutProbeLease,
+		},
+		"invalid cooldown is rejected": {
+			cooldown:  "soon",
+			expectErr: "google-flex-stockout-cooldown",
+		},
+		"negative cooldown is rejected": {
+			cooldown:  "-1s",
+			expectErr: "must be >= 0",
+		},
+		"cooldown requires bulkInsert": {
+			cooldown:  "1m",
+			expectErr: "requires --google-bulk-insert",
+		},
+		"invalid probe lease is rejected": {
+			cooldown:   "1m",
+			probeLease: "later",
+			expectErr:  "google-flex-stockout-probe-lease",
+		},
+		"non-positive probe lease is rejected when enabled": {
+			cooldown:   "1m",
+			probeLease: "0s",
+			expectErr:  "must be > 0",
+		},
+		"negative probe lease is rejected when disabled": {
+			probeLease: "-1s",
+			expectErr:  "must be >= 0",
+		},
+		"probe lease override requires bulkInsert": {
+			probeLease: "6m",
+			expectErr:  "requires --google-bulk-insert",
+		},
+		"probe lease must cover operation timeout": {
+			cooldown:   "2m",
+			probeLease: "90s",
+			expectErr:  "must be >= google-operation-backoff-max-elapsed-time",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			driver := NewDriver("machine", t.TempDir())
+			values := map[string]interface{}{
+				"google-project": "PROJECT",
+			}
+			if tt.cooldown != "" {
+				values["google-flex-stockout-cooldown"] = tt.cooldown
+			}
+			if tt.probeLease != "" {
+				values["google-flex-stockout-probe-lease"] = tt.probeLease
+			}
+			if tt.expectErr == "" && tt.cooldown != "" {
+				values["google-bulk-insert"] = true
+				values["google-region"] = "us-east1"
+			}
+			if tt.expectErr == "must be >= google-operation-backoff-max-elapsed-time" {
+				values["google-bulk-insert"] = true
+				values["google-region"] = "us-east1"
+			}
+
+			flags := &drivers.CheckDriverOptions{FlagsValues: values, CreateFlags: driver.GetCreateFlags()}
+			err := driver.SetConfigFromFlags(flags)
+			if tt.expectErr != "" {
+				require.ErrorContains(t, err, tt.expectErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, driver.FlexStockoutCooldown)
+			assert.Equal(t, tt.expectedProbe, driver.FlexStockoutProbeLease)
+		})
+	}
+}
+
+func TestSetConfigFromFlags_COSWaitForCloudInit(t *testing.T) {
+	tests := map[string]struct {
+		flag             string
+		expectedEnabled  bool
 		expectedMetadata metadataMap
 	}{
 		"disabled by default": {
 			expectedMetadata: metadataMap{},
 		},
 		"enabled injects metadata": {
-			enabled:          true,
-			expectedMetadata: metadataMap{cosDockerNetworkReadinessMetadataKey: "true"},
+			flag:             "google-cos-wait-for-cloud-init",
+			expectedEnabled:  true,
+			expectedMetadata: metadataMap{cosWaitForCloudInitMetadataKey: "true"},
+		},
+		"deprecated flag still enables": {
+			flag:             "google-cos-docker-network-readiness-gate",
+			expectedEnabled:  true,
+			expectedMetadata: metadataMap{cosWaitForCloudInitMetadataKey: "true"},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			driver := NewDriver("", "")
+			flagsValues := map[string]interface{}{"google-project": "PROJECT"}
+			if tt.flag != "" {
+				flagsValues[tt.flag] = true
+			}
+			flags := &drivers.CheckDriverOptions{
+				FlagsValues: flagsValues,
+				CreateFlags: driver.GetCreateFlags(),
+			}
+
+			require.NoError(t, driver.SetConfigFromFlags(flags))
+			assert.Equal(t, tt.expectedEnabled, driver.COSWaitForCloudInit)
+			assert.Equal(t, tt.expectedMetadata, driver.Metadata)
+		})
+	}
+}
+
+func TestSetConfigFromFlags_COSDockerNetworkReadinessURL(t *testing.T) {
+	tests := map[string]struct {
+		url              string
+		expectErr        bool
+		expectedMetadata metadataMap
+	}{
+		"unset by default": {
+			expectedMetadata: metadataMap{},
+		},
+		"valid https url injects metadata": {
+			url:              "https://gitlab.com/readiness",
+			expectedMetadata: metadataMap{cosDockerNetworkReadinessURLMetadataKey: "https://gitlab.com/readiness"},
+		},
+		"query string accepted": {
+			url:              "https://gitlab.com/health?check=1&token=abc",
+			expectedMetadata: metadataMap{cosDockerNetworkReadinessURLMetadataKey: "https://gitlab.com/health?check=1&token=abc"},
+		},
+		"non-http scheme rejected": {
+			url:       "ftp://gitlab.com",
+			expectErr: true,
+		},
+		"missing host rejected": {
+			url:       "https:///path",
+			expectErr: true,
 		},
 	}
 
@@ -44,13 +185,18 @@ func TestSetConfigFromFlags_COSDockerNetworkReadinessGate(t *testing.T) {
 			flags := &drivers.CheckDriverOptions{
 				FlagsValues: map[string]interface{}{
 					"google-project": "PROJECT",
-					"google-cos-docker-network-readiness-gate": tt.enabled,
+					"google-cos-docker-network-readiness-url": tt.url,
 				},
 				CreateFlags: driver.GetCreateFlags(),
 			}
 
-			require.NoError(t, driver.SetConfigFromFlags(flags))
-			assert.Equal(t, tt.enabled, driver.COSDockerNetworkReadinessGate)
+			err := driver.SetConfigFromFlags(flags)
+			if tt.expectErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.url, driver.COSDockerNetworkReadinessURL)
 			assert.Equal(t, tt.expectedMetadata, driver.Metadata)
 		})
 	}
@@ -222,4 +368,93 @@ func TestMetadataMapFromStringSlice(t *testing.T) {
 			assert.Equal(t, tt.expectedResult, result)
 		})
 	}
+}
+
+func TestSetConfigFromFlags_COSTLSViaMetadata(t *testing.T) {
+	newFlags := func(driver *Driver, values map[string]interface{}) *drivers.CheckDriverOptions {
+		values["google-project"] = "PROJECT"
+		return &drivers.CheckDriverOptions{FlagsValues: values, CreateFlags: driver.GetCreateFlags()}
+	}
+
+	t.Run("off by default", func(t *testing.T) {
+		driver := NewDriver("", "")
+		require.NoError(t, driver.SetConfigFromFlags(newFlags(driver, map[string]interface{}{})))
+		assert.False(t, driver.COSTLSViaMetadata)
+		requested, err := driver.TLSBootstrapRequested()
+		require.NoError(t, err)
+		assert.False(t, requested)
+	})
+
+	t.Run("flag is stored and reported", func(t *testing.T) {
+		driver := NewDriver("", "")
+		require.NoError(t, driver.SetConfigFromFlags(newFlags(driver, map[string]interface{}{
+			"google-cos-tls-via-metadata": true,
+		})))
+		assert.True(t, driver.COSTLSViaMetadata)
+		requested, err := driver.TLSBootstrapRequested()
+		require.NoError(t, err)
+		assert.True(t, requested)
+	})
+
+	t.Run("rejects use-existing", func(t *testing.T) {
+		driver := NewDriver("", "")
+		err := driver.SetConfigFromFlags(newFlags(driver, map[string]interface{}{
+			"google-cos-tls-via-metadata": true,
+			"google-use-existing":         true,
+		}))
+		require.ErrorContains(t, err, "mutually exclusive")
+	})
+}
+
+func TestSetTLSBootstrap(t *testing.T) {
+	complete := drivers.TLSBootstrap{
+		CACert:       []byte("ca"),
+		ServerCert:   []byte("cert"),
+		ServerKey:    []byte("key"),
+		DaemonDropin: []byte("dropin"),
+	}
+
+	t.Run("requires the flag", func(t *testing.T) {
+		driver := NewDriver("m", t.TempDir())
+		require.ErrorContains(t, driver.SetTLSBootstrap(complete), "--google-cos-tls-via-metadata")
+		assert.Nil(t, driver.tlsBootstrap)
+	})
+
+	t.Run("rejects incomplete material", func(t *testing.T) {
+		driver := NewDriver("m", t.TempDir())
+		driver.COSTLSViaMetadata = true
+		incomplete := complete
+		incomplete.ServerKey = nil
+		require.ErrorContains(t, driver.SetTLSBootstrap(incomplete), "incomplete")
+		assert.Nil(t, driver.tlsBootstrap)
+	})
+
+	t.Run("stores the material", func(t *testing.T) {
+		driver := NewDriver("m", t.TempDir())
+		driver.COSTLSViaMetadata = true
+		require.NoError(t, driver.SetTLSBootstrap(complete))
+		assert.Equal(t, &complete, driver.tlsBootstrap)
+	})
+
+	t.Run("create refuses to run without it", func(t *testing.T) {
+		driver := NewDriver("m", t.TempDir())
+		driver.COSTLSViaMetadata = true
+		require.ErrorContains(t, driver.Create(), "no TLS bootstrap")
+	})
+}
+
+func TestRecreateFromDiskSupported(t *testing.T) {
+	t.Run("direct mode", func(t *testing.T) {
+		require.NoError(t, NewDriver("m", t.TempDir()).recreateFromDiskSupported())
+	})
+	t.Run("bulk insert", func(t *testing.T) {
+		d := NewDriver("m", t.TempDir())
+		d.BulkInsert = true
+		require.ErrorContains(t, d.recreateFromDiskSupported(), "--google-bulk-insert")
+	})
+	t.Run("tls via metadata", func(t *testing.T) {
+		d := NewDriver("m", t.TempDir())
+		d.COSTLSViaMetadata = true
+		require.ErrorContains(t, d.recreateFromDiskSupported(), "--google-cos-tls-via-metadata")
+	})
 }
