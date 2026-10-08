@@ -45,8 +45,6 @@ func Enabled() bool {
 	return enabled
 }
 
-// Unregistered driver names go to the RPC factory, so third-party driver
-// binaries keep working.
 type Factory struct {
 	plugin  rpcdriver.RPCClientDriverFactory
 	enabled bool
@@ -59,6 +57,7 @@ func NewFactory(plugin rpcdriver.RPCClientDriverFactory) *Factory {
 func (f *Factory) NewDriver(driverName string, rawDriver []byte) (drivers.Driver, error) {
 	newDriver, ok := lookup(driverName)
 	if !ok || !f.enabled {
+		// Third-party driver binaries only exist on the plugin path.
 		return f.plugin.NewRPCClientDriver(driverName, rawDriver)
 	}
 
