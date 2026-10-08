@@ -61,7 +61,10 @@ func (r *recovering) GetURL() (url string, err error) {
 func (r *recovering) GetState() (s state.State, err error) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			s, err = state.Error, panicError(rec)
+			err = panicError(rec)
+		}
+		if err != nil {
+			s = state.Error
 		}
 	}()
 	return r.Driver.GetState()

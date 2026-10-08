@@ -58,7 +58,11 @@ func (f *Factory) NewDriver(driverName string, rawDriver []byte) (drivers.Driver
 	newDriver, ok := lookup(driverName)
 	if !ok || !f.enabled {
 		// Third-party driver binaries only exist on the plugin path.
-		return f.plugin.NewRPCClientDriver(driverName, rawDriver)
+		d, err := f.plugin.NewRPCClientDriver(driverName, rawDriver)
+		if err != nil {
+			return nil, err
+		}
+		return d, nil
 	}
 
 	d := newDriver()

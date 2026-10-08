@@ -61,8 +61,9 @@ func TestFactoryNewDriver(t *testing.T) {
 		plugin := &fakePluginFactory{}
 		f := &Factory{plugin: plugin, enabled: true}
 
-		_, err := f.NewDriver("third-party", raw)
+		d, err := f.NewDriver("third-party", raw)
 		assert.ErrorIs(t, err, errPlugin)
+		assert.Nil(t, d)
 		assert.Equal(t, []string{"third-party"}, plugin.calls)
 	})
 

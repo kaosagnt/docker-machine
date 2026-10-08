@@ -69,6 +69,11 @@ func TestRecoveringGetState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, state.Running, s)
 
+	r = &recovering{Driver: &panicDriver{returnErr: errors.New("API not available")}}
+	s, err = r.GetState()
+	assert.Error(t, err)
+	assert.Equal(t, state.Error, s, "an error always comes with state.Error, as over RPC")
+
 	r = &recovering{Driver: &panicDriver{panicWith: "boom"}}
 	s, err = r.GetState()
 	assert.Error(t, err)
