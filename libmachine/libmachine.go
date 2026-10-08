@@ -11,6 +11,7 @@ import (
 	"github.com/docker/machine/libmachine/cert"
 	"github.com/docker/machine/libmachine/check"
 	"github.com/docker/machine/libmachine/drivers"
+	"github.com/docker/machine/libmachine/drivers/inprocess"
 	"github.com/docker/machine/libmachine/drivers/plugin/localbinary"
 	"github.com/docker/machine/libmachine/drivers/rpc"
 	"github.com/docker/machine/libmachine/engine"
@@ -40,21 +41,28 @@ type Client struct {
 	SSHClientType  ssh.ClientType
 	GithubAPIToken string
 	*persist.Filestore
-	clientDriverFactory rpcdriver.RPCClientDriverFactory
+	driverFactory DriverFactory
+}
+
+// DriverFactory builds a host's driver from its name and the JSON the store
+// holds for it.
+type DriverFactory interface {
+	NewDriver(driverName string, rawDriver []byte) (drivers.Driver, error)
+	io.Closer
 }
 
 func NewClient(storePath, certsDir string) *Client {
 	return &Client{
-		certsDir:            certsDir,
-		IsDebug:             false,
-		SSHClientType:       ssh.External,
-		Filestore:           persist.NewFilestore(storePath, certsDir, certsDir),
-		clientDriverFactory: rpcdriver.NewRPCClientDriverFactory(),
+		certsDir:      certsDir,
+		IsDebug:       false,
+		SSHClientType: ssh.External,
+		Filestore:     persist.NewFilestore(storePath, certsDir, certsDir),
+		driverFactory: inprocess.NewFactory(rpcdriver.NewRPCClientDriverFactory()),
 	}
 }
 
 func (api *Client) NewHost(driverName string, rawDriver []byte) (*host.Host, error) {
-	driver, err := api.clientDriverFactory.NewRPCClientDriver(driverName, rawDriver)
+	driver, err := api.driverFactory.NewDriver(driverName, rawDriver)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +102,7 @@ func (api *Client) Load(name string) (*host.Host, error) {
 		return nil, err
 	}
 
-	d, err := api.clientDriverFactory.NewRPCClientDriver(h.DriverName, h.RawDriver)
+	d, err := api.driverFactory.NewDriver(h.DriverName, h.RawDriver)
 	if err != nil {
 		// Not being able to find a driver binary is a "known error"
 		if _, ok := err.(localbinary.ErrPluginBinaryNotFound); ok {
@@ -201,5 +209,5 @@ func (api *Client) performCreate(h *host.Host) error {
 }
 
 func (api *Client) Close() error {
-	return api.clientDriverFactory.Close()
+	return api.driverFactory.Close()
 }
