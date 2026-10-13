@@ -337,6 +337,15 @@ func TestSetConfigFromFlags_BulkInsertFlexSelection(t *testing.T) {
 			expectErr:    true,
 			errSubstring: "set subnetwork",
 		},
+		"selection without region is not checked against driver subnetwork": {
+			flagsValues: map[string]interface{}{
+				"google-project":        "PROJECT",
+				"google-bulk-insert":    true,
+				"google-region":         "us-east1",
+				"google-subnetwork":     "projects/net/regions/us-east4/subnetworks/home",
+				"google-flex-selection": []string{"machine-type=n2-standard-2"},
+			},
+		},
 		"selection subnetwork path in another region is rejected": {
 			flagsValues: map[string]interface{}{
 				"google-project":        "PROJECT",

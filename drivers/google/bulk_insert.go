@@ -631,12 +631,14 @@ func (d *Driver) validateFlexSelectionPlacement(sel flexSelection) error {
 			}
 		}
 	}
-	subnetwork := sel.effectiveSubnetwork(d.Subnetwork)
-	if subnetworkRegion := regionOfSubnetworkPath(subnetwork); subnetworkRegion != "" && subnetworkRegion != region {
-		if sel.Subnetwork == "" {
-			return fmt.Errorf("region %q differs from --google-region %q; set subnetwork, --google-subnetwork %q is in another region", sel.Region, d.Region, d.Subnetwork)
+	if sel.Subnetwork != "" {
+		if r := regionOfSubnetworkPath(sel.Subnetwork); r != "" && r != region {
+			return fmt.Errorf("subnetwork %q is not in region %q", sel.Subnetwork, region)
 		}
-		return fmt.Errorf("subnetwork %q is not in region %q", sel.Subnetwork, region)
+		return nil
+	}
+	if sel.Region != "" && sel.Region != d.Region && regionOfSubnetworkPath(d.Subnetwork) != "" {
+		return fmt.Errorf("region %q differs from --google-region %q; set subnetwork, --google-subnetwork %q is in another region", sel.Region, d.Region, d.Subnetwork)
 	}
 	return nil
 }
