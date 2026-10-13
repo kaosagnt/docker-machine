@@ -530,7 +530,7 @@ func regionOfZone(zone string) string {
 	return ""
 }
 
-var subnetworkRegionPath = regexp.MustCompile(`/regions/([^/]+)/subnetworks/`)
+var subnetworkRegionPath = regexp.MustCompile(`(?:^|/)regions/([^/]+)/subnetworks/`)
 
 // regionOfSubnetworkPath returns "" for a bare subnetwork name.
 func regionOfSubnetworkPath(subnetwork string) string {

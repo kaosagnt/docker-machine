@@ -1313,5 +1313,6 @@ func TestRegion_ZoneWinsOverExplicit(t *testing.T) {
 func TestRegionOfSubnetworkPath(t *testing.T) {
 	assert.Equal(t, "us-east4", regionOfSubnetworkPath("projects/net/regions/us-east4/subnetworks/sub"))
 	assert.Equal(t, "us-east4", regionOfSubnetworkPath("https://www.googleapis.com/compute/v1/projects/net/regions/us-east4/subnetworks/sub"))
+	assert.Equal(t, "us-east4", regionOfSubnetworkPath("regions/us-east4/subnetworks/sub"))
 	assert.Equal(t, "", regionOfSubnetworkPath("sub"))
 }
