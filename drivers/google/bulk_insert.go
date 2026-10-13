@@ -469,7 +469,7 @@ func (c *ComputeUtil) buildLocationPolicy(sel flexSelection) *raw.LocationPolicy
 func parseLocationZoneEntry(entry string) (zone, preference string) {
 	zone, preference = splitLocationZoneEntry(entry)
 	if preference != "ALLOW" && preference != "DENY" {
-		log.Warnf("--google-location-zone %q: preference %q is not valid for bulkInsert (only ALLOW or DENY); coercing to ALLOW.", entry, preference)
+		log.Warnf("zone %q: preference %q is not valid for bulkInsert (only ALLOW or DENY); coercing to ALLOW.", entry, preference)
 		preference = "ALLOW"
 	}
 	return zone, preference
@@ -522,11 +522,22 @@ func (s flexSelection) effectiveSubnetwork(driverSubnetwork string) string {
 	return driverSubnetwork
 }
 
+// regionOfZone returns "" for a name without a zone suffix.
 func regionOfZone(zone string) string {
 	if i := strings.LastIndexByte(zone, '-'); i > 0 {
 		return zone[:i]
 	}
-	return zone
+	return ""
+}
+
+var subnetworkRegionPath = regexp.MustCompile(`/regions/([^/]+)/subnetworks/`)
+
+// regionOfSubnetworkPath returns "" for a bare subnetwork name.
+func regionOfSubnetworkPath(subnetwork string) string {
+	if m := subnetworkRegionPath.FindStringSubmatch(subnetwork); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // parseFlexSelectionEntry parses a comma-separated key=value list.
@@ -609,19 +620,23 @@ func parseFlexSelectionEntry(entry string) (flexSelection, error) {
 }
 
 // validateFlexSelectionPlacement checks a parsed selection against the
-// driver-level region and subnetwork it would otherwise inherit.
+// driver-level region, zones and subnetwork it would otherwise inherit.
 func (d *Driver) validateFlexSelectionPlacement(sel flexSelection) error {
+	region := sel.effectiveRegion(d.Region)
 	if sel.Region == "" {
 		for _, entry := range sel.Zones {
 			zone, _ := splitLocationZoneEntry(entry)
-			if regionOfZone(zone) != d.Region {
-				return fmt.Errorf("zone %q is not in --google-region %q", zone, d.Region)
+			if regionOfZone(zone) != region {
+				return fmt.Errorf("zone %q is not in --google-region %q", zone, region)
 			}
 		}
-		return nil
 	}
-	if sel.Region != d.Region && sel.Subnetwork == "" && strings.Contains(d.Subnetwork, "/subnetworks/") {
-		return fmt.Errorf("region %q differs from --google-region %q; set subnetwork, --google-subnetwork %q is in another region", sel.Region, d.Region, d.Subnetwork)
+	subnetwork := sel.effectiveSubnetwork(d.Subnetwork)
+	if subnetworkRegion := regionOfSubnetworkPath(subnetwork); subnetworkRegion != "" && subnetworkRegion != region {
+		if sel.Subnetwork == "" {
+			return fmt.Errorf("region %q differs from --google-region %q; set subnetwork, --google-subnetwork %q is in another region", sel.Region, d.Region, d.Subnetwork)
+		}
+		return fmt.Errorf("subnetwork %q is not in region %q", sel.Subnetwork, region)
 	}
 	return nil
 }

@@ -1093,9 +1093,9 @@ func TestResolvePlacedZone(t *testing.T) {
 // end-to-end regression guard for #155: a successful bulkInsert must
 // populate c.placedZone from the operation's PerLocationStatus, so the
 // subsequent finishPostCreate resolves the zone WITHOUT an
-// AggregatedList call. A regression (e.g. reverting to waitForRegionOp,
-// or not assigning placedZone) would leave placedZone empty and fail
-// this test.
+// AggregatedList call. A regression (e.g. discarding the completed
+// operation, or not assigning placedZone) would leave placedZone empty
+// and fail this test.
 func TestAttemptBulkInsertForSelection_SuccessSetsPlacedZone(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/aggregated/instances") {
@@ -1306,4 +1306,12 @@ func TestRegion_ZoneWinsOverExplicit(t *testing.T) {
 	assert.Equal(t, "us-east1", c.region())
 	c.zone = "us-east4-b"
 	assert.Equal(t, "us-east4", c.region())
+	c.zone = "malformed"
+	assert.Equal(t, "us-east1", c.region())
+}
+
+func TestRegionOfSubnetworkPath(t *testing.T) {
+	assert.Equal(t, "us-east4", regionOfSubnetworkPath("projects/net/regions/us-east4/subnetworks/sub"))
+	assert.Equal(t, "us-east4", regionOfSubnetworkPath("https://www.googleapis.com/compute/v1/projects/net/regions/us-east4/subnetworks/sub"))
+	assert.Equal(t, "", regionOfSubnetworkPath("sub"))
 }

@@ -337,6 +337,26 @@ func TestSetConfigFromFlags_BulkInsertFlexSelection(t *testing.T) {
 			expectErr:    true,
 			errSubstring: "set subnetwork",
 		},
+		"selection subnetwork path in another region is rejected": {
+			flagsValues: map[string]interface{}{
+				"google-project":        "PROJECT",
+				"google-bulk-insert":    true,
+				"google-region":         "us-east1",
+				"google-flex-selection": []string{"machine-type=n2-standard-2,region=us-east4,subnetwork=projects/net/regions/us-east1/subnetworks/home"},
+			},
+			expectErr:    true,
+			errSubstring: `subnetwork "projects/net/regions/us-east1/subnetworks/home" is not in region "us-east4"`,
+		},
+		"location zone outside --google-region is rejected": {
+			flagsValues: map[string]interface{}{
+				"google-project":       "PROJECT",
+				"google-bulk-insert":   true,
+				"google-region":        "us-east1",
+				"google-location-zone": []string{"us-east1-b", "us-east4-a:DENY"},
+			},
+			expectErr:    true,
+			errSubstring: `--google-location-zone "us-east4-a" is not in --google-region "us-east1"`,
+		},
 		"selection zone outside --google-region is rejected": {
 			flagsValues: map[string]interface{}{
 				"google-project":        "PROJECT",

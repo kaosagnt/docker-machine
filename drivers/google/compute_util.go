@@ -243,8 +243,8 @@ func (c *ComputeUtil) staticAddress() (string, error) {
 // selection may have placed the VM in another region, so the zone wins
 // once it is known.
 func (c *ComputeUtil) region() string {
-	if c.zone != "" {
-		return regionOfZone(c.zone)
+	if region := regionOfZone(c.zone); region != "" {
+		return region
 	}
 	return c.regionExplicit
 }
