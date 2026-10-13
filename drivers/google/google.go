@@ -363,7 +363,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-flex-selection",
-			Usage:  "(Experimental) Candidate machine-type / disk spec for bulkInsert. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput override the boot disk for this entry. Repeat in preference order: first occurrence is tried first, subsequent entries are tried only if the previous one fails with a stockout-class error. Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Optional in bulkInsert mode: when omitted, a single selection is synthesised from --google-machine-type and --google-disk-type.",
+			Usage:  "(Experimental) Candidate machine-type / disk spec for bulkInsert. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput override the boot disk for this entry; region, zone (repeatable, zone[:ALLOW|DENY]) and subnetwork override --google-region, --google-location-zone and --google-subnetwork for this entry. An entry in another region does not inherit --google-location-zone and must set subnetwork when --google-subnetwork is a full path; a bare subnetwork name resolves in the entry's region. Repeat in preference order: first occurrence is tried first, subsequent entries are tried only if the previous one fails with a stockout-class error. Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Optional in bulkInsert mode: when omitted, a single selection is synthesised from --google-machine-type and --google-disk-type.",
 			EnvVar: "GOOGLE_FLEX_SELECTION",
 		},
 		mcnflag.StringFlag{
@@ -538,22 +538,21 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 			if strings.TrimSpace(entry) == "" {
 				return errors.New("--google-flex-selection entries must be non-empty")
 			}
-			if _, err := parseFlexSelectionEntry(entry); err != nil {
+			sel, err := parseFlexSelectionEntry(entry)
+			if err != nil {
+				return fmt.Errorf("--google-flex-selection %q: %w", entry, err)
+			}
+			if err := d.validateFlexSelectionPlacement(sel); err != nil {
 				return fmt.Errorf("--google-flex-selection %q: %w", entry, err)
 			}
 		}
 		for _, entry := range d.LocationZones {
-			// Split off the zone directly rather than via
-			// parseLocationZoneEntry: the latter warns on invalid
-			// preferences, and calling it here too would emit that
-			// warning twice (once at config validation, once at create).
-			// The create-time call in buildLocationPolicy owns the warning.
-			zone := entry
-			if i := strings.IndexByte(entry, ':'); i >= 0 {
-				zone = entry[:i]
-			}
+			zone, _ := splitLocationZoneEntry(entry)
 			if strings.TrimSpace(zone) == "" {
 				return fmt.Errorf("--google-location-zone entry %q has an empty zone (expected zone[:PREFERENCE])", entry)
+			}
+			if regionOfZone(zone) != d.Region {
+				return fmt.Errorf("--google-location-zone %q is not in --google-region %q", zone, d.Region)
 			}
 		}
 	} else {

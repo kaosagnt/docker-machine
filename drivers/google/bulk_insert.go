@@ -159,6 +159,7 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			"attempts":     len(selections),
 			"machine_type": sel.MachineType,
 			"disk_type":    sel.DiskType,
+			"region":       c.selectionRegion(sel),
 		}).Info("bulkInsert attempt")
 		retryable, attemptErr := c.attemptBulkInsertForSelection(d, sel)
 		observedAt := time.Now()
@@ -178,6 +179,7 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			"attempt":      i + 1,
 			"attempts":     len(selections),
 			"machine_type": sel.MachineType,
+			"region":       c.selectionRegion(sel),
 			"error":        attemptErr.Error(),
 		}).Warn("bulkInsert selection hit stockout-class failure, falling through")
 		if err := health.recordStockoutAt(d, sel, observedAt); err != nil {
@@ -221,6 +223,10 @@ func (c *ComputeUtil) effectiveFlexSelections(d *Driver) ([]flexSelection, error
 	return selections, nil
 }
 
+func (c *ComputeUtil) selectionRegion(sel flexSelection) string {
+	return sel.effectiveRegion(c.regionExplicit)
+}
+
 // attemptBulkInsertForSelection issues a single bulkInsert call for
 // one selection. Returns:
 //   - (false, nil) on success;
@@ -233,6 +239,7 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 		return false, fmt.Errorf("building instance properties for bulkInsert: %w", err)
 	}
 
+	region := c.selectionRegion(sel)
 	req := &raw.BulkInsertInstanceResource{
 		Count:    1,
 		MinCount: 1,
@@ -240,7 +247,7 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 			c.instanceName: {},
 		},
 		InstanceProperties: props,
-		LocationPolicy:     c.buildLocationPolicy(),
+		LocationPolicy:     c.buildLocationPolicy(sel),
 	}
 
 	reqDumpBuf := new(bytes.Buffer)
@@ -256,9 +263,9 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 	// later failure can't accidentally reuse an earlier attempt's zone.
 	c.placedZone = ""
 
-	op, err := c.service.RegionInstances.BulkInsert(c.project, c.region(), req).Do()
+	op, err := c.service.RegionInstances.BulkInsert(c.project, region, req).Do()
 	if err != nil {
-		wrapped := fmt.Errorf("bulkInsert rejected create for %q in %q: %w", c.instanceName, c.region(), err)
+		wrapped := fmt.Errorf("bulkInsert rejected create for %q in %q: %w", c.instanceName, region, err)
 		// Most synchronous API rejections (auth, malformed request,
 		// quota) are never stockout: fail fast. But GCE also surfaces
 		// a region-wide capacity shortage synchronously as an HTTP 503
@@ -273,11 +280,11 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 	// one with no name. Either makes the wait meaningless, so fail fast
 	// with context rather than panic or wait on an empty name.
 	if op == nil || op.Name == "" {
-		return false, fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, c.region())
+		return false, fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, region)
 	}
 
 	log.WithField("operation", op.Name).Info("Waiting for bulkInsert operation")
-	doneOp, waitErr := c.waitForRegionOpResult(op.Name)
+	doneOp, waitErr := c.waitForRegionOpResult(region, op.Name)
 	if waitErr != nil {
 		// The operation failed overall, but it may still have placed the
 		// VM before erroring (a partial-failure / rollback state). If the
@@ -390,10 +397,10 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver, sel flexSelec
 		props.Scheduling.OnHostMaintenance = c.maintenancePolicy
 	}
 
-	if strings.Contains(c.subnetwork, "/subnetworks/") {
-		props.NetworkInterfaces[0].Subnetwork = c.subnetwork
-	} else if c.subnetwork != "" {
-		props.NetworkInterfaces[0].Subnetwork = "projects/" + c.networkProject + "/regions/" + c.region() + "/subnetworks/" + c.subnetwork
+	if subnetwork := sel.effectiveSubnetwork(c.subnetwork); strings.Contains(subnetwork, "/subnetworks/") {
+		props.NetworkInterfaces[0].Subnetwork = subnetwork
+	} else if subnetwork != "" {
+		props.NetworkInterfaces[0].Subnetwork = "projects/" + c.networkProject + "/regions/" + c.selectionRegion(sel) + "/subnetworks/" + subnetwork
 	}
 
 	if !c.useInternalIPOnly {
@@ -436,12 +443,13 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver, sel flexSelec
 // considers every zone in the region. Without this, omitting
 // LocationPolicy lets GCP fall back to the ANY_SINGLE_ZONE default
 // region-wide.
-func (c *ComputeUtil) buildLocationPolicy() *raw.LocationPolicy {
+func (c *ComputeUtil) buildLocationPolicy(sel flexSelection) *raw.LocationPolicy {
+	zones := sel.effectiveZones(c.regionExplicit, c.locationZones)
 	policy := &raw.LocationPolicy{
 		TargetShape: "ANY",
-		Locations:   make(map[string]raw.LocationPolicyLocation, len(c.locationZones)),
+		Locations:   make(map[string]raw.LocationPolicyLocation, len(zones)),
 	}
-	for _, entry := range c.locationZones {
+	for _, entry := range zones {
 		zone, pref := parseLocationZoneEntry(entry)
 		policy.Locations["zones/"+zone] = raw.LocationPolicyLocation{
 			Preference: pref,
@@ -459,15 +467,20 @@ func (c *ComputeUtil) buildLocationPolicy() *raw.LocationPolicy {
 // not reliably reject an invalid preference, so passing it verbatim
 // yields undefined placement behaviour rather than a clear error.
 func parseLocationZoneEntry(entry string) (zone, preference string) {
+	zone, preference = splitLocationZoneEntry(entry)
+	if preference != "ALLOW" && preference != "DENY" {
+		log.Warnf("zone %q: preference %q is not valid for bulkInsert (only ALLOW or DENY); coercing to ALLOW.", entry, preference)
+		preference = "ALLOW"
+	}
+	return zone, preference
+}
+
+func splitLocationZoneEntry(entry string) (zone, preference string) {
 	zone = entry
 	preference = "ALLOW"
 	if i := strings.IndexByte(entry, ':'); i >= 0 {
 		zone = entry[:i]
 		preference = strings.ToUpper(entry[i+1:])
-	}
-	if preference != "ALLOW" && preference != "DENY" {
-		log.Warnf("--google-location-zone %q: preference %q is not valid for bulkInsert (only ALLOW or DENY); coercing to ALLOW.", entry, preference)
-		preference = "ALLOW"
 	}
 	return zone, preference
 }
@@ -478,6 +491,53 @@ type flexSelection struct {
 	DiskType       string
 	DiskIops       int64
 	DiskThroughput int64
+	Region         string
+	Zones          []string
+	Subnetwork     string
+}
+
+func (s flexSelection) effectiveRegion(driverRegion string) string {
+	if s.Region != "" {
+		return s.Region
+	}
+	return driverRegion
+}
+
+// A selection in another region does not inherit the driver-level zones,
+// which are in the driver's region.
+func (s flexSelection) effectiveZones(driverRegion string, driverZones []string) []string {
+	if len(s.Zones) > 0 {
+		return s.Zones
+	}
+	if s.Region != "" && s.Region != driverRegion {
+		return nil
+	}
+	return driverZones
+}
+
+func (s flexSelection) effectiveSubnetwork(driverSubnetwork string) string {
+	if s.Subnetwork != "" {
+		return s.Subnetwork
+	}
+	return driverSubnetwork
+}
+
+// regionOfZone returns "" for a name without a zone suffix.
+func regionOfZone(zone string) string {
+	if i := strings.LastIndexByte(zone, '-'); i > 0 {
+		return zone[:i]
+	}
+	return ""
+}
+
+var subnetworkRegionPath = regexp.MustCompile(`(?:^|/)regions/([^/]+)/subnetworks/`)
+
+// regionOfSubnetworkPath returns "" for a bare subnetwork name.
+func regionOfSubnetworkPath(subnetwork string) string {
+	if m := subnetworkRegionPath.FindStringSubmatch(subnetwork); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // parseFlexSelectionEntry parses a comma-separated key=value list.
@@ -496,7 +556,7 @@ func parseFlexSelectionEntry(entry string) (flexSelection, error) {
 		}
 		k := strings.TrimSpace(parts[0])
 		v := strings.TrimSpace(parts[1])
-		if seen[k] {
+		if seen[k] && k != "zone" {
 			return sel, fmt.Errorf("duplicate key %q", k)
 		}
 		seen[k] = true
@@ -511,6 +571,21 @@ func parseFlexSelectionEntry(entry string) (flexSelection, error) {
 				return sel, fmt.Errorf("empty value for key %q", k)
 			}
 			sel.DiskType = v
+		case "region":
+			if v == "" {
+				return sel, fmt.Errorf("empty value for key %q", k)
+			}
+			sel.Region = v
+		case "zone":
+			if zone, _ := splitLocationZoneEntry(v); strings.TrimSpace(zone) == "" {
+				return sel, fmt.Errorf("zone %q has an empty zone (expected zone[:PREFERENCE])", v)
+			}
+			sel.Zones = append(sel.Zones, v)
+		case "subnetwork":
+			if v == "" {
+				return sel, fmt.Errorf("empty value for key %q", k)
+			}
+			sel.Subnetwork = v
 		case "disk-iops":
 			n, err := strconv.ParseInt(v, 10, 64)
 			if err != nil || n < 0 {
@@ -533,7 +608,39 @@ func parseFlexSelectionEntry(entry string) (flexSelection, error) {
 	if sel.DiskType == "" && (seen["disk-iops"] || seen["disk-throughput"]) {
 		return sel, fmt.Errorf("disk-iops/disk-throughput require disk-type")
 	}
+	if sel.Region != "" {
+		for _, entry := range sel.Zones {
+			zone, _ := splitLocationZoneEntry(entry)
+			if regionOfZone(zone) != sel.Region {
+				return sel, fmt.Errorf("zone %q is not in region %q", zone, sel.Region)
+			}
+		}
+	}
 	return sel, nil
+}
+
+// validateFlexSelectionPlacement checks a parsed selection against the
+// driver-level region, zones and subnetwork it would otherwise inherit.
+func (d *Driver) validateFlexSelectionPlacement(sel flexSelection) error {
+	region := sel.effectiveRegion(d.Region)
+	if sel.Region == "" {
+		for _, entry := range sel.Zones {
+			zone, _ := splitLocationZoneEntry(entry)
+			if regionOfZone(zone) != region {
+				return fmt.Errorf("zone %q is not in --google-region %q", zone, region)
+			}
+		}
+	}
+	if sel.Subnetwork != "" {
+		if r := regionOfSubnetworkPath(sel.Subnetwork); r != "" && r != region {
+			return fmt.Errorf("subnetwork %q is not in region %q", sel.Subnetwork, region)
+		}
+		return nil
+	}
+	if sel.Region != "" && sel.Region != d.Region && regionOfSubnetworkPath(d.Subnetwork) != "" {
+		return fmt.Errorf("region %q differs from --google-region %q; set subnetwork, --google-subnetwork %q is in another region", sel.Region, d.Region, d.Subnetwork)
+	}
+	return nil
 }
 
 // isStockoutError reports whether err carries a GCE operation error
@@ -775,7 +882,7 @@ func (c *ComputeUtil) finishPostCreate(d *Driver) error {
 	}
 
 	c.syncResolvedMachineType(d, instance)
-	log.WithFields(log.Fields{"machine_type": d.ResolvedMachineType, "zone": d.ResolvedZone}).Info("bulkInsert placed")
+	log.WithFields(log.Fields{"machine_type": d.ResolvedMachineType, "zone": d.ResolvedZone, "region": c.region()}).Info("bulkInsert placed")
 
 	if err := c.addFirewallTag(instance); err != nil {
 		return fmt.Errorf("adding firewall tag to bulkInsert instance %q: %w", c.instanceName, err)

@@ -52,7 +52,7 @@ func TestBuildLocationPolicy_NoZones(t *testing.T) {
 	// empty Locations map, so GCP considers every zone in the region
 	// rather than falling back to the ANY_SINGLE_ZONE default.
 	c := &ComputeUtil{}
-	p := c.buildLocationPolicy()
+	p := c.buildLocationPolicy(flexSelection{})
 	require.NotNil(t, p)
 	assert.Equal(t, "ANY", p.TargetShape)
 	assert.Empty(t, p.Locations)
@@ -62,7 +62,7 @@ func TestBuildLocationPolicy_Zones(t *testing.T) {
 	c := &ComputeUtil{
 		locationZones: []string{"us-east1-b", "us-east1-c:PREFERRED", "us-east1-d:DENY"},
 	}
-	p := c.buildLocationPolicy()
+	p := c.buildLocationPolicy(flexSelection{})
 	require.NotNil(t, p)
 	// TargetShape=ANY is load-bearing: the bulkInsert default
 	// (ANY_SINGLE_ZONE) pins placement to one zone and fails on
@@ -73,6 +73,28 @@ func TestBuildLocationPolicy_Zones(t *testing.T) {
 	// PREFERRED is coerced to ALLOW (not a valid bulkInsert preference).
 	assert.Equal(t, "ALLOW", p.Locations["zones/us-east1-c"].Preference)
 	assert.Equal(t, "DENY", p.Locations["zones/us-east1-d"].Preference)
+}
+
+func TestBuildLocationPolicy_SelectionZones(t *testing.T) {
+	c := &ComputeUtil{
+		regionExplicit: "us-east1",
+		locationZones:  []string{"us-east1-b", "us-east1-c"},
+	}
+
+	p := c.buildLocationPolicy(flexSelection{Region: "us-east4", Zones: []string{"us-east4-a", "us-east4-b:DENY"}})
+	require.Len(t, p.Locations, 2)
+	assert.Equal(t, "ALLOW", p.Locations["zones/us-east4-a"].Preference)
+	assert.Equal(t, "DENY", p.Locations["zones/us-east4-b"].Preference)
+
+	p = c.buildLocationPolicy(flexSelection{Region: "us-east4"})
+	assert.Empty(t, p.Locations, "a selection in another region must not inherit the driver zones")
+
+	p = c.buildLocationPolicy(flexSelection{Region: "us-east1"})
+	assert.Len(t, p.Locations, 2, "a selection in the driver region inherits the driver zones")
+
+	p = c.buildLocationPolicy(flexSelection{Zones: []string{"us-east1-d"}})
+	require.Len(t, p.Locations, 1)
+	assert.Contains(t, p.Locations, "zones/us-east1-d")
 }
 
 func TestParseFlexSelectionEntry(t *testing.T) {
@@ -105,6 +127,24 @@ func TestParseFlexSelectionEntry(t *testing.T) {
 			entry: "machine-type=n4-standard-2,foo=bar",
 			want:  flexSelection{MachineType: "n4-standard-2"},
 		},
+		"region zones and subnetwork": {
+			entry: "machine-type=n4-standard-2,region=us-east4,zone=us-east4-a,zone=us-east4-b:DENY,subnetwork=projects/net/regions/us-east4/subnetworks/sub",
+			want: flexSelection{
+				MachineType: "n4-standard-2",
+				Region:      "us-east4",
+				Zones:       []string{"us-east4-a", "us-east4-b:DENY"},
+				Subnetwork:  "projects/net/regions/us-east4/subnetworks/sub",
+			},
+		},
+		"zones without region": {
+			entry: "machine-type=n4-standard-2,zone=us-east1-b",
+			want:  flexSelection{MachineType: "n4-standard-2", Zones: []string{"us-east1-b"}},
+		},
+		"zone outside region":    {entry: "machine-type=n4-standard-2,region=us-east4,zone=us-east1-b", wantErrSubst: `zone "us-east1-b" is not in region "us-east4"`},
+		"empty zone":             {entry: "machine-type=n4-standard-2,zone=:DENY", wantErrSubst: "empty zone"},
+		"empty region":           {entry: "machine-type=n4-standard-2,region=", wantErrSubst: `empty value for key "region"`},
+		"empty subnetwork":       {entry: "machine-type=n4-standard-2,subnetwork=", wantErrSubst: `empty value for key "subnetwork"`},
+		"duplicate region":       {entry: "machine-type=n4-standard-2,region=a,region=b", wantErrSubst: `duplicate key "region"`},
 		"missing machine-type":   {entry: "disk-type=hyperdisk-balanced", wantErrSubst: "missing required key machine-type"},
 		"missing equals":         {entry: "n4-standard-2", wantErrSubst: "is not key=value"},
 		"empty value":            {entry: "machine-type=n4-standard-2,disk-type=", wantErrSubst: `empty value for key "disk-type"`},
@@ -1053,9 +1093,9 @@ func TestResolvePlacedZone(t *testing.T) {
 // end-to-end regression guard for #155: a successful bulkInsert must
 // populate c.placedZone from the operation's PerLocationStatus, so the
 // subsequent finishPostCreate resolves the zone WITHOUT an
-// AggregatedList call. A regression (e.g. reverting to waitForRegionOp,
-// or not assigning placedZone) would leave placedZone empty and fail
-// this test.
+// AggregatedList call. A regression (e.g. discarding the completed
+// operation, or not assigning placedZone) would leave placedZone empty
+// and fail this test.
 func TestAttemptBulkInsertForSelection_SuccessSetsPlacedZone(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/aggregated/instances") {
@@ -1176,4 +1216,103 @@ func TestBuildBulkInsertInstanceProperties_ServiceAccount(t *testing.T) {
 	props, err = c.buildBulkInsertInstanceProperties(withSSHKey(t, newDriver(true)), sel)
 	require.NoError(t, err)
 	assert.Nil(t, props.ServiceAccounts)
+}
+
+func TestBuildBulkInsertInstanceProperties_SelectionSubnetwork(t *testing.T) {
+	d := withSSHKey(t, &Driver{
+		MachineImage:   "ubuntu-os-cloud/global/images/ubuntu-2204",
+		DiskSize:       20,
+		Network:        "default",
+		ServiceAccount: defaultServiceAccount,
+		Scopes:         defaultScopes,
+	})
+	c := &ComputeUtil{
+		project:        "p",
+		networkProject: "net",
+		diskTypeURL:    "pd-balanced",
+		globalURL:      apiURL + "p/global",
+		regionExplicit: "us-east1",
+		subnetwork:     "projects/net/regions/us-east1/subnetworks/home",
+	}
+
+	props, err := c.buildBulkInsertInstanceProperties(d, flexSelection{MachineType: "n4-standard-2"})
+	require.NoError(t, err)
+	assert.Equal(t, "projects/net/regions/us-east1/subnetworks/home", props.NetworkInterfaces[0].Subnetwork)
+
+	props, err = c.buildBulkInsertInstanceProperties(d, flexSelection{
+		MachineType: "n4-standard-2",
+		Region:      "us-east4",
+		Subnetwork:  "projects/net/regions/us-east4/subnetworks/fallback",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "projects/net/regions/us-east4/subnetworks/fallback", props.NetworkInterfaces[0].Subnetwork)
+
+	c.subnetwork = "shared"
+	props, err = c.buildBulkInsertInstanceProperties(d, flexSelection{MachineType: "n4-standard-2", Region: "us-east4"})
+	require.NoError(t, err)
+	assert.Equal(t, "projects/net/regions/us-east4/subnetworks/shared", props.NetworkInterfaces[0].Subnetwork,
+		"a bare subnetwork name resolves in the selection's region")
+}
+
+func TestAttemptBulkInsertForSelection_UsesSelectionRegion(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		var op raw.Operation
+		switch {
+		case strings.Contains(r.URL.Path, "/instances/bulkInsert"):
+			var req raw.BulkInsertInstanceResource
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			assert.Contains(t, req.LocationPolicy.Locations, "zones/us-east4-a")
+			assert.NotContains(t, req.LocationPolicy.Locations, "zones/us-east1-c")
+			op = raw.Operation{Name: "op-x", Status: "RUNNING"}
+		default:
+			op = raw.Operation{
+				Name:   "op-x",
+				Status: "DONE",
+				InstancesBulkInsertOperationMetadata: &raw.InstancesBulkInsertOperationMetadata{
+					PerLocationStatus: map[string]raw.BulkInsertOperationStatus{
+						"zones/us-east4-a": {CreatedVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+					},
+				},
+			}
+		}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	c := newBulkInsertComputeUtil(t, srv)
+	c.zone = ""
+	c.regionExplicit = "us-east1"
+	c.locationZones = []string{"us-east1-c"}
+
+	retryable, err := c.attemptBulkInsertForSelection(withSSHKey(t, &Driver{Network: "default"}), flexSelection{
+		MachineType: "n4-standard-2",
+		Region:      "us-east4",
+		Zones:       []string{"us-east4-a"},
+	})
+	require.NoError(t, err)
+	assert.False(t, retryable)
+	assert.Equal(t, "us-east4-a", c.placedZone)
+
+	require.Len(t, paths, 2)
+	assert.Contains(t, paths[0], "/regions/us-east4/instances/bulkInsert")
+	assert.Contains(t, paths[1], "/regions/us-east4/operations/op-x")
+}
+
+func TestRegion_ZoneWinsOverExplicit(t *testing.T) {
+	c := &ComputeUtil{regionExplicit: "us-east1"}
+	assert.Equal(t, "us-east1", c.region())
+	c.zone = "us-east4-b"
+	assert.Equal(t, "us-east4", c.region())
+	c.zone = "malformed"
+	assert.Equal(t, "us-east1", c.region())
+}
+
+func TestRegionOfSubnetworkPath(t *testing.T) {
+	assert.Equal(t, "us-east4", regionOfSubnetworkPath("projects/net/regions/us-east4/subnetworks/sub"))
+	assert.Equal(t, "us-east4", regionOfSubnetworkPath("https://www.googleapis.com/compute/v1/projects/net/regions/us-east4/subnetworks/sub"))
+	assert.Equal(t, "us-east4", regionOfSubnetworkPath("regions/us-east4/subnetworks/sub"))
+	assert.Equal(t, "", regionOfSubnetworkPath("sub"))
 }
