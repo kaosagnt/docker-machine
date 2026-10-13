@@ -214,7 +214,7 @@ func (c *ComputeUtil) deleteDisk() error {
 	}
 
 	log.Infof("Waiting for disk to delete.")
-	return c.waitForRegionalOp(op.Name)
+	return c.waitForZoneOp(op.Name)
 }
 
 // staticAddress returns the external static IP address.
@@ -238,15 +238,15 @@ func (c *ComputeUtil) staticAddress() (string, error) {
 	return externalAddress.Address, nil
 }
 
-// region returns the GCP region this ComputeUtil targets. In bulkInsert
-// mode the operator supplies it explicitly (zone is unknown pre-create);
-// otherwise it's derived from zone by stripping the trailing "-<letter>"
-// (e.g. us-east1-c -> us-east1).
+// region returns the region of the instance's zone. Before a bulkInsert
+// placement the zone is unknown and --google-region is used; a flex
+// selection may have placed the VM in another region, so the zone wins
+// once it is known.
 func (c *ComputeUtil) region() string {
-	if c.regionExplicit != "" {
-		return c.regionExplicit
+	if c.zone != "" {
+		return regionOfZone(c.zone)
 	}
-	return c.zone[:len(c.zone)-2]
+	return c.regionExplicit
 }
 
 func (c *ComputeUtil) firewallRule() (*raw.Firewall, error) {
@@ -487,7 +487,7 @@ func (c *ComputeUtil) createInstance(d *Driver) error {
 	}
 
 	log.Infof("Waiting for Instance")
-	return c.waitForRegionalOp(op.Name)
+	return c.waitForZoneOp(op.Name)
 }
 
 // configureInstance configures an existing instance for use with Docker Machine.
@@ -524,7 +524,7 @@ func (c *ComputeUtil) addFirewallTag(instance *raw.Instance) error {
 		return err
 	}
 
-	return c.waitForRegionalOp(op.Name)
+	return c.waitForZoneOp(op.Name)
 }
 
 // uploadSSHKey adds the SSH key to an existing instance. New instances get
@@ -542,7 +542,7 @@ func (c *ComputeUtil) uploadSSHKey(instance *raw.Instance, sshKeyPath string) er
 		return err
 	}
 
-	return c.waitForRegionalOp(op.Name)
+	return c.waitForZoneOp(op.Name)
 }
 
 // Both the current and the deprecated key name, for images that still read
@@ -717,7 +717,7 @@ func (c *ComputeUtil) deleteInstance() error {
 	}
 
 	log.Infof("Waiting for instance to delete.")
-	return c.waitForRegionalOp(op.Name)
+	return c.waitForZoneOp(op.Name)
 }
 
 // updateInstanceLabels merges labels into the instance's current label
@@ -749,7 +749,7 @@ func (c *ComputeUtil) updateInstanceLabels(labels map[string]string) error {
 		return err
 	}
 
-	return c.waitForRegionalOp(op.Name)
+	return c.waitForZoneOp(op.Name)
 }
 
 // stopInstance stops the instance.
@@ -764,7 +764,7 @@ func (c *ComputeUtil) stopInstance() error {
 	}
 
 	log.Infof("Waiting for instance to stop.")
-	return c.waitForRegionalOp(op.Name)
+	return c.waitForZoneOp(op.Name)
 }
 
 // startInstance starts the instance.
@@ -779,7 +779,7 @@ func (c *ComputeUtil) startInstance() error {
 	}
 
 	log.Infof("Waiting for instance to start.")
-	return c.waitForRegionalOp(op.Name)
+	return c.waitForZoneOp(op.Name)
 }
 
 // operationError carries a structured GCE Operation.Error.Errors[0]
@@ -882,32 +882,17 @@ func (c *ComputeUtil) waitForOpResult(opGetter func() (*raw.Operation, error)) (
 	}
 }
 
-// waitForRegionalOp waits for the regional operation to finish.
-//
-// Historical naming: this waits for ZoneOperations despite its name and
-// renaming it would touch every caller. For true region-scoped operations
-// (bulkInsert) use waitForRegionOp below.
-func (c *ComputeUtil) waitForRegionalOp(name string) error {
+func (c *ComputeUtil) waitForZoneOp(name string) error {
 	return c.waitForOp(func() (*raw.Operation, error) {
 		return c.service.ZoneOperations.Wait(c.project, c.zone, name).Do()
 	})
 }
 
-// waitForRegionOp waits for an actually-regional operation (one issued
-// against RegionInstances etc.). Distinct from waitForRegionalOp because
-// that one polls ZoneOperations under a misleading name.
-func (c *ComputeUtil) waitForRegionOp(name string) error {
-	return c.waitForOp(func() (*raw.Operation, error) {
-		return c.service.RegionOperations.Wait(c.project, c.region(), name).Do()
-	})
-}
-
-// waitForRegionOpResult is waitForRegionOp but returns the completed
-// Operation, so the bulkInsert path can read placement metadata
-// (InstancesBulkInsertOperationMetadata) without a separate lookup.
-func (c *ComputeUtil) waitForRegionOpResult(name string) (*raw.Operation, error) {
+// waitForRegionOpResult returns the completed Operation so the bulkInsert
+// path can read placement metadata without a separate lookup.
+func (c *ComputeUtil) waitForRegionOpResult(region, name string) (*raw.Operation, error) {
 	return c.waitForOpResult(func() (*raw.Operation, error) {
-		return c.service.RegionOperations.Wait(c.project, c.region(), name).Do()
+		return c.service.RegionOperations.Wait(c.project, region, name).Do()
 	})
 }
 

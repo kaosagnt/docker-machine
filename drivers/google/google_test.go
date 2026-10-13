@@ -308,6 +308,45 @@ func TestSetConfigFromFlags_BulkInsertFlexSelection(t *testing.T) {
 			expectErr:    true,
 			errSubstring: "requires --google-bulk-insert",
 		},
+		"cross-region selection with its own subnetwork": {
+			flagsValues: map[string]interface{}{
+				"google-project":        "PROJECT",
+				"google-bulk-insert":    true,
+				"google-region":         "us-east1",
+				"google-subnetwork":     "projects/net/regions/us-east1/subnetworks/home",
+				"google-flex-selection": []string{"machine-type=n2-standard-2,region=us-east4,zone=us-east4-a,subnetwork=projects/net/regions/us-east4/subnetworks/fallback"},
+			},
+		},
+		"cross-region selection inheriting a bare subnetwork name": {
+			flagsValues: map[string]interface{}{
+				"google-project":        "PROJECT",
+				"google-bulk-insert":    true,
+				"google-region":         "us-east1",
+				"google-subnetwork":     "shared",
+				"google-flex-selection": []string{"machine-type=n2-standard-2,region=us-east4"},
+			},
+		},
+		"cross-region selection inheriting a subnetwork path is rejected": {
+			flagsValues: map[string]interface{}{
+				"google-project":        "PROJECT",
+				"google-bulk-insert":    true,
+				"google-region":         "us-east1",
+				"google-subnetwork":     "projects/net/regions/us-east1/subnetworks/home",
+				"google-flex-selection": []string{"machine-type=n2-standard-2,region=us-east4"},
+			},
+			expectErr:    true,
+			errSubstring: "set subnetwork",
+		},
+		"selection zone outside --google-region is rejected": {
+			flagsValues: map[string]interface{}{
+				"google-project":        "PROJECT",
+				"google-bulk-insert":    true,
+				"google-region":         "us-east1",
+				"google-flex-selection": []string{"machine-type=n2-standard-2,zone=us-east4-a"},
+			},
+			expectErr:    true,
+			errSubstring: `zone "us-east4-a" is not in --google-region "us-east1"`,
+		},
 	}
 
 	for tn, tt := range tests {

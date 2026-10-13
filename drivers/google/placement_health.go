@@ -70,7 +70,7 @@ func newPlacementHealth(d *Driver, now func() time.Time) *placementHealth {
 }
 
 func (h *placementHealth) selectionClass(d *Driver, selection flexSelection) placementClass {
-	zones := append([]string(nil), d.LocationZones...)
+	zones := append([]string(nil), selection.effectiveZones(d.Region, d.LocationZones)...)
 	sort.Strings(zones)
 	diskType := selection.DiskType
 	if diskType == "" {
@@ -85,7 +85,7 @@ func (h *placementHealth) selectionClass(d *Driver, selection flexSelection) pla
 		diskThroughput = int64(d.ProvisionedThroughput)
 	}
 	return placementClass{
-		Project: d.Project, Region: d.Region, Zones: zones, MachineType: selection.MachineType,
+		Project: d.Project, Region: selection.effectiveRegion(d.Region), Zones: zones, MachineType: selection.MachineType,
 		DiskType: diskType, DiskIops: diskIops, DiskThroughput: diskThroughput,
 		Accelerator: d.Accelerator, MinCPUPlatform: d.MinCPUPlatform,
 	}
@@ -196,7 +196,7 @@ func (h *placementHealth) order(d *Driver, configured []flexSelection) []flexSel
 	}
 
 	for _, selection := range cooling {
-		log.Infof("Trying cooling bulkInsert flex selection machine-type=%q after non-cooling selections", selection.MachineType)
+		log.Infof("Trying cooling bulkInsert flex selection machine-type=%q region=%q after non-cooling selections", selection.MachineType, selection.effectiveRegion(d.Region))
 	}
 	return append(healthy, cooling...)
 }
