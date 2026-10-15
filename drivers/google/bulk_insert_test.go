@@ -356,9 +356,9 @@ func TestClassifyOpError(t *testing.T) {
 		err  error
 		want failureClass
 	}{
-		"nil":                                   {err: nil, want: ""},
-		"plain error not retryable":             {err: errors.New("network blew up"), want: ""},
-		"untyped operation error not retryable": {err: errors.New("operation error: {SOME_CODE [] x y [] []}"), want: ""},
+		"nil":                                   {err: nil, want: failureUnknown},
+		"plain error not retryable":             {err: errors.New("network blew up"), want: failureUnknown},
+		"untyped operation error not retryable": {err: errors.New("operation error: {SOME_CODE [] x y [] []}"), want: failureUnknown},
 		"VM_MIN_COUNT_NOT_REACHED is retryable": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "VM_MIN_COUNT_NOT_REACHED"}},
 			want: failureStockout,
@@ -379,7 +379,7 @@ func TestClassifyOpError(t *testing.T) {
 		},
 		"unknown code not retryable": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "INVALID_FIELD_VALUE"}},
-			want: "",
+			want: failureUnknown,
 		},
 		"QUOTA_EXCEEDED is quota": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "QUOTA_EXCEEDED"}},
@@ -391,7 +391,7 @@ func TestClassifyOpError(t *testing.T) {
 		},
 		"empty code not retryable": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: ""}},
-			want: "",
+			want: failureUnknown,
 		},
 	}
 
@@ -407,11 +407,11 @@ func TestClassifyAPIError(t *testing.T) {
 		err  error
 		want failureClass
 	}{
-		"nil":                      {err: nil, want: ""},
-		"plain error not stockout": {err: errors.New("network blew up"), want: ""},
+		"nil":                      {err: nil, want: failureUnknown},
+		"plain error not stockout": {err: errors.New("network blew up"), want: failureUnknown},
 		"operationError not an API error": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "VM_MIN_COUNT_NOT_REACHED"}},
-			want: "",
+			want: failureUnknown,
 		},
 		"503 insufficientCapacity is stockout": {
 			err: &googleapi.Error{
@@ -441,7 +441,7 @@ func TestClassifyAPIError(t *testing.T) {
 				Code:   403,
 				Errors: []googleapi.ErrorItem{{Reason: "backendError"}},
 			},
-			want: "",
+			want: failureUnknown,
 		},
 		"403 quotaExceeded is quota": {
 			err: &googleapi.Error{
@@ -455,11 +455,11 @@ func TestClassifyAPIError(t *testing.T) {
 				Code:   503,
 				Errors: []googleapi.ErrorItem{{Reason: "notFound"}},
 			},
-			want: "",
+			want: failureUnknown,
 		},
 		"api error with no error items is fatal": {
 			err:  &googleapi.Error{Code: 503},
-			want: "",
+			want: failureUnknown,
 		},
 		"multiple reasons, one stockout, is stockout": {
 			err: &googleapi.Error{
@@ -508,7 +508,7 @@ func TestClassifyAPIError(t *testing.T) {
 				Code:   403,
 				Errors: []googleapi.ErrorItem{{Reason: "insufficientCapacity"}},
 			},
-			want: "",
+			want: failureUnknown,
 		},
 		"capacity reason in Details ErrorInfo is stockout": {
 			err: &googleapi.Error{
@@ -534,7 +534,7 @@ func TestClassifyAPIError(t *testing.T) {
 					},
 				},
 			},
-			want: "",
+			want: failureUnknown,
 		},
 		"capacity reason on wrong Details @type is fatal": {
 			err: &googleapi.Error{
@@ -546,7 +546,7 @@ func TestClassifyAPIError(t *testing.T) {
 					},
 				},
 			},
-			want: "",
+			want: failureUnknown,
 		},
 		"capacity reason with absent Details @type is stockout (tolerant)": {
 			err: &googleapi.Error{
@@ -564,7 +564,7 @@ func TestClassifyAPIError(t *testing.T) {
 					map[string]interface{}{"@type": 123, "reason": "RESOURCE_AVAILABILITY"},
 				},
 			},
-			want: "",
+			want: failureUnknown,
 		},
 		"capacity reason with null Details @type is fatal": {
 			err: &googleapi.Error{
@@ -573,7 +573,7 @@ func TestClassifyAPIError(t *testing.T) {
 					map[string]interface{}{"@type": nil, "reason": "RESOURCE_AVAILABILITY"},
 				},
 			},
-			want: "",
+			want: failureUnknown,
 		},
 		"Details capacity reason but wrong status is fatal": {
 			err: &googleapi.Error{
@@ -582,14 +582,14 @@ func TestClassifyAPIError(t *testing.T) {
 					map[string]interface{}{"reason": "RESOURCE_AVAILABILITY"},
 				},
 			},
-			want: "",
+			want: failureUnknown,
 		},
 		"Details entry not a map is ignored (no panic)": {
 			err: &googleapi.Error{
 				Code:    503,
 				Details: []interface{}{"some string detail", 42},
 			},
-			want: "",
+			want: failureUnknown,
 		},
 		"Details reason field not a string is ignored": {
 			err: &googleapi.Error{
@@ -598,7 +598,7 @@ func TestClassifyAPIError(t *testing.T) {
 					map[string]interface{}{"reason": 123},
 				},
 			},
-			want: "",
+			want: failureUnknown,
 		},
 	}
 
@@ -765,7 +765,7 @@ func TestAttemptBulkInsertForSelection_SyncRejectionClass(t *testing.T) {
 		"404 notFound": {
 			status:    http.StatusNotFound,
 			body:      `{"error":{"code":404,"message":"not found","errors":[{"reason":"notFound"}]}}`,
-			wantClass: "",
+			wantClass: failureUnknown,
 			wantErr:   true,
 		},
 		"429 capacity in details[] only": {
@@ -998,6 +998,10 @@ func TestCreateInstanceViaBulkInsert_AdvanceOn(t *testing.T) {
 	t.Run("backend advances without cooling when opted in", func(t *testing.T) {
 		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4d-standard-2", "n2d-standard-2"}, run(t, []string{"stockout", "backend"}, backendBody, http.StatusServiceUnavailable))
 	})
+	t.Run("unknown advances without cooling when opted in", func(t *testing.T) {
+		const body = `{"error":{"code":400,"message":"bad","errors":[{"reason":"invalid"}]}}`
+		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4d-standard-2", "n2d-standard-2"}, run(t, []string{"unknown"}, body, http.StatusBadRequest))
+	})
 }
 
 func TestParseFailureClasses(t *testing.T) {
@@ -1005,7 +1009,7 @@ func TestParseFailureClasses(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[failureClass]bool{failureStockout: true, failureQuota: true, failureBackend: true}, got)
 	_, err = parseFailureClasses([]string{"stockout,rainbows"})
-	assert.EqualError(t, err, `unknown class "rainbows" (known: stockout, quota, backend)`)
+	assert.EqualError(t, err, `unknown class "rainbows" (known: stockout, quota, backend, unknown)`)
 }
 
 func TestZoneFromBulkInsertOp(t *testing.T) {

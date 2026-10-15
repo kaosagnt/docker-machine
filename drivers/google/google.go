@@ -101,8 +101,9 @@ type Driver struct {
 	// First entry = rank 0; format documented on --google-flex-selection.
 	FlexSelections []string
 
-	// FlexAdvanceOn lists the failure classes (stockout, quota, backend)
-	// after which the next flex selection is tried. Empty means stockout.
+	// FlexAdvanceOn lists the failure classes (stockout, quota, backend,
+	// unknown) after which the next flex selection is tried. Empty means
+	// stockout.
 	FlexAdvanceOn []string
 
 	// FlexStockoutCooldown temporarily deprioritizes a flex selection after a
@@ -372,7 +373,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-flex-advance-on",
-			Usage:  "Failure classes after which the next flex selection is tried: stockout, quota, backend. Repeat or comma-separate. Default: stockout.",
+			Usage:  "Failure classes after which the next flex selection is tried: stockout, quota, backend, unknown. Repeat or comma-separate. Default: stockout.",
 			EnvVar: "GOOGLE_FLEX_ADVANCE_ON",
 		},
 		mcnflag.StringFlag{

@@ -1,11 +1,8 @@
 package google
 
-// With --google-bulk-insert the driver issues one regional
-// RegionInstances.BulkInsert per flex selection (count=1) and moves to
-// the next selection on a stockout. GCP picks the zone within a
-// selection through the LocationPolicy. InstanceFlexibilityPolicy is
-// not used: at count=1 GCP commits to rank 0 and reports
-// VM_MIN_COUNT_NOT_REACHED without trying the lower ranks.
+// InstanceFlexibilityPolicy is not used: at count=1 GCP commits to rank
+// 0 and reports VM_MIN_COUNT_NOT_REACHED without trying the lower ranks,
+// so the driver tries the selections itself.
 
 import (
 	"bytes"
@@ -26,25 +23,21 @@ import (
 
 var zonePathSegment = regexp.MustCompile(`/zones/([^/]+)`)
 
-// Rejects region names and self-links, so a bad PerLocationStatus key
-// falls back to the AggregatedList lookup instead of a wrong zone URL.
 var gceZoneName = regexp.MustCompile(`^[a-z]+-[a-z]*[0-9]+-[a-z]$`)
 var machineTypePathSegment = regexp.MustCompile(`/machineTypes/([^/]+)$`)
 
 const bootDeviceName = "boot"
 
-// failureClass says why a bulkInsert attempt failed. The empty class is
-// fatal for the create; the others may advance to the next selection
-// depending on --google-flex-advance-on.
 type failureClass string
 
 const (
 	failureStockout failureClass = "stockout"
 	failureQuota    failureClass = "quota"
 	failureBackend  failureClass = "backend"
+	failureUnknown  failureClass = "unknown"
 )
 
-var failureClasses = []failureClass{failureStockout, failureQuota, failureBackend}
+var failureClasses = []failureClass{failureStockout, failureQuota, failureBackend, failureUnknown}
 
 func parseFailureClasses(entries []string) (map[failureClass]bool, error) {
 	out := map[failureClass]bool{}
@@ -59,7 +52,7 @@ func parseFailureClasses(entries []string) (map[failureClass]bool, error) {
 				known = known || c == name
 			}
 			if !known {
-				return nil, fmt.Errorf("unknown class %q (known: stockout, quota, backend)", raw)
+				return nil, fmt.Errorf("unknown class %q (known: stockout, quota, backend, unknown)", raw)
 			}
 			out[name] = true
 		}
@@ -67,8 +60,6 @@ func parseFailureClasses(entries []string) (map[failureClass]bool, error) {
 	return out, nil
 }
 
-// Operation error codes by class. VM_MIN_COUNT_NOT_REACHED is the
-// bulkInsert wrapper code for a stockout at count=1.
 var opErrorClasses = map[string]failureClass{
 	"VM_MIN_COUNT_NOT_REACHED":                  failureStockout,
 	"ZONE_RESOURCE_POOL_EXHAUSTED":              failureStockout,
@@ -77,9 +68,8 @@ var opErrorClasses = map[string]failureClass{
 	"INTERNAL_ERROR":                            failureBackend,
 }
 
-// Reasons on a synchronous BulkInsert rejection, by class.
-// insufficientCapacity is not in GCP's documented error tables but is
-// what GCE sends on a 503 for a region-wide shortage.
+// insufficientCapacity is undocumented but is what GCE sends on a 503
+// for a region-wide shortage.
 var apiReasonClasses = map[string]failureClass{
 	"insufficientCapacity":                      failureStockout,
 	"ZONE_RESOURCE_POOL_EXHAUSTED":              failureStockout,
@@ -91,7 +81,6 @@ var apiReasonClasses = map[string]failureClass{
 	"internalError":                             failureBackend,
 }
 
-// A reason is only trusted on the status codes GCE uses for its class.
 var apiClassStatusCodes = map[failureClass]map[int]bool{
 	failureStockout: {http.StatusServiceUnavailable: true, http.StatusTooManyRequests: true},
 	failureQuota:    {http.StatusForbidden: true, http.StatusTooManyRequests: true},
@@ -129,7 +118,7 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			}
 			return c.finishPostCreate(d)
 		}
-		if class == "" || !advanceOn[class] {
+		if !advanceOn[class] {
 			if err := health.releaseProbe(d, sel); err != nil {
 				log.Warnf("Could not release bulkInsert placement probe: %v", err)
 			}
@@ -143,9 +132,7 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			"class":        string(class),
 			"error":        attemptErr.Error(),
 		}).Warn("bulkInsert selection hit stockout-class failure, falling through")
-		// A backend error says nothing about capacity, so the selection
-		// is not cooled.
-		if class == failureBackend {
+		if class == failureBackend || class == failureUnknown {
 			if err := health.releaseProbe(d, sel); err != nil {
 				log.Warnf("Could not release bulkInsert placement probe: %v", err)
 			}
@@ -166,8 +153,6 @@ func (d *Driver) flexAdvanceOn() map[failureClass]bool {
 	return classes
 }
 
-// Without --google-flex-selection the single selection comes from
-// --google-machine-type and the driver disk settings.
 func (c *ComputeUtil) effectiveFlexSelections(d *Driver) ([]flexSelection, error) {
 	if len(c.flexSelections) == 0 {
 		sel := flexSelection{
@@ -197,12 +182,10 @@ func (c *ComputeUtil) selectionRegion(sel flexSelection) string {
 	return sel.effectiveRegion(c.regionExplicit)
 }
 
-// The class is empty on success and on failures that are fatal for the
-// create.
 func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection) (failureClass, error) {
 	props, err := c.buildBulkInsertInstanceProperties(d, sel)
 	if err != nil {
-		return "", fmt.Errorf("building instance properties for bulkInsert: %w", err)
+		return failureUnknown, fmt.Errorf("building instance properties for bulkInsert: %w", err)
 	}
 
 	region := c.selectionRegion(sel)
@@ -232,14 +215,13 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 		return classifyAPIError(err), fmt.Errorf("bulkInsert rejected create for %q in %q: %w", c.instanceName, region, err)
 	}
 	if op == nil || op.Name == "" {
-		return "", fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, region)
+		return failureUnknown, fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, region)
 	}
 
 	log.WithField("operation", op.Name).Info("Waiting for bulkInsert operation")
 	doneOp, waitErr := c.waitForRegionOpResult(region, op.Name)
 	if waitErr != nil {
-		// A failed operation may still have placed the VM. Record the
-		// zone so Remove can delete it without an AggregatedList lookup.
+		// A failed operation may still have placed the VM.
 		if zone, ok := zoneFromBulkInsertOp(doneOp); ok {
 			d.ResolvedZone = zone
 		}
@@ -253,9 +235,7 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 	return "", nil
 }
 
-// Name and zone belong to the bulkInsert envelope, not the properties.
-// MachineType, DiskType and AcceleratorType are bare names: bulkInsert
-// rejects zonal URLs.
+// bulkInsert rejects zonal URLs for machine, disk and accelerator types.
 func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver, sel flexSelection) (*raw.InstanceProperties, error) {
 	var net string
 	if strings.Contains(d.Network, "/networks/") {
@@ -350,9 +330,8 @@ func (c *ComputeUtil) buildBulkInsertInstanceProperties(d *Driver, sel flexSelec
 	return props, nil
 }
 
-// The bulkInsert default TargetShape is ANY_SINGLE_ZONE, which commits
-// to one zone and does not try the others on stockout. ANY is sent even
-// with no zones configured, so GCP considers every zone in the region.
+// The default TargetShape, ANY_SINGLE_ZONE, does not try another zone
+// on stockout.
 func (c *ComputeUtil) buildLocationPolicy(sel flexSelection) *raw.LocationPolicy {
 	zones := sel.effectiveZones(c.regionExplicit, c.locationZones)
 	policy := &raw.LocationPolicy{
@@ -368,9 +347,8 @@ func (c *ComputeUtil) buildLocationPolicy(sel flexSelection) *raw.LocationPolicy
 	return policy
 }
 
-// bulkInsert only accepts ALLOW or DENY and does not reliably reject
-// anything else, so other values (PREFERRED is a MIG concept) become
-// ALLOW.
+// bulkInsert does not reliably reject preferences other than ALLOW and
+// DENY.
 func parseLocationZoneEntry(entry string) (zone, preference string) {
 	zone, preference = splitLocationZoneEntry(entry)
 	if preference != "ALLOW" && preference != "DENY" {
@@ -407,8 +385,7 @@ func (s flexSelection) effectiveRegion(driverRegion string) string {
 	return driverRegion
 }
 
-// A selection in another region does not inherit the driver-level zones,
-// which are in the driver's region.
+// Driver-level zones are in the driver's region.
 func (s flexSelection) effectiveZones(driverRegion string, driverZones []string) []string {
 	if len(s.Zones) > 0 {
 		return s.Zones
@@ -426,7 +403,6 @@ func (s flexSelection) effectiveSubnetwork(driverSubnetwork string) string {
 	return driverSubnetwork
 }
 
-// regionOfZone returns "" for a name without a zone suffix.
 func regionOfZone(zone string) string {
 	if i := strings.LastIndexByte(zone, '-'); i > 0 {
 		return zone[:i]
@@ -436,7 +412,6 @@ func regionOfZone(zone string) string {
 
 var subnetworkRegionPath = regexp.MustCompile(`(?:^|/)regions/([^/]+)/subnetworks/`)
 
-// regionOfSubnetworkPath returns "" for a bare subnetwork name.
 func regionOfSubnetworkPath(subnetwork string) string {
 	if m := subnetworkRegionPath.FindStringSubmatch(subnetwork); m != nil {
 		return m[1]
@@ -546,18 +521,19 @@ func (d *Driver) validateFlexSelectionPlacement(sel flexSelection) error {
 func classifyOpError(err error) failureClass {
 	var opErr *operationError
 	if !errors.As(err, &opErr) || opErr == nil {
-		return ""
+		return failureUnknown
 	}
-	return opErrorClasses[opErr.Code]
+	if class, ok := opErrorClasses[opErr.Code]; ok {
+		return class
+	}
+	return failureUnknown
 }
 
-// The reason can be in the legacy errors[] list or in a details[]
-// google.rpc.ErrorInfo entry, which the REST client leaves as an
-// untyped map.
+// The REST client leaves details[] entries as untyped maps.
 func classifyAPIError(err error) failureClass {
 	var apiErr *googleapi.Error
 	if !errors.As(err, &apiErr) || apiErr == nil {
-		return ""
+		return failureUnknown
 	}
 	classOf := func(reason string) failureClass {
 		class := apiReasonClasses[reason]
@@ -589,12 +565,9 @@ func classifyAPIError(err error) failureClass {
 			return class
 		}
 	}
-	return ""
+	return failureUnknown
 }
 
-// zoneFromBulkInsertOp returns the one zone with CreatedVmCount > 0 in
-// the operation's PerLocationStatus. ok is false when there is none, or
-// more than one, and the caller falls back to AggregatedList.
 func zoneFromBulkInsertOp(op *raw.Operation) (zone string, ok bool) {
 	if op == nil || op.InstancesBulkInsertOperationMetadata == nil {
 		return "", false
@@ -647,9 +620,8 @@ func (c *ComputeUtil) discoverInstanceZone() (string, error) {
 
 var errInstanceNotPlaced = errors.New("instance not placed")
 
-// The AggregatedList fallback uses the per-region filtered list quota,
-// which runs out under stockout load and then orphans an already placed
-// VM, so the zone from the operation is preferred.
+// AggregatedList uses the per-region filtered list quota, which runs out
+// under stockout load and then orphans an already placed VM.
 func (c *ComputeUtil) resolvePlacedZone() (string, error) {
 	if c.placedZone != "" {
 		return c.placedZone, nil
