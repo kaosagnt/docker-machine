@@ -118,7 +118,10 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			}
 			return c.finishPostCreate(d)
 		}
-		if !advanceOn[class] {
+		// A failed operation that placed the VM anyway must not be
+		// followed by another create under the same name. Remove deletes
+		// it through ResolvedZone.
+		if !advanceOn[class] || d.ResolvedZone != "" {
 			if err := health.releaseProbe(d, sel); err != nil {
 				log.Warnf("Could not release bulkInsert placement probe: %v", err)
 			}

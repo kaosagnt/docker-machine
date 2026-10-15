@@ -1004,6 +1004,45 @@ func TestCreateInstanceViaBulkInsert_AdvanceOn(t *testing.T) {
 	})
 }
 
+func TestCreateInstanceViaBulkInsert_PlacedVMDoesNotAdvance(t *testing.T) {
+	var bulkInsertCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var op raw.Operation
+		switch {
+		case strings.Contains(r.URL.Path, "/instances/bulkInsert"):
+			bulkInsertCalls.Add(1)
+			op = raw.Operation{Name: "op-bulk-err", Status: "RUNNING"}
+		case strings.Contains(r.URL.Path, "/operations/op-bulk-err"):
+			op = raw.Operation{
+				Name:   "op-bulk-err",
+				Status: "DONE",
+				Error:  &raw.OperationError{Errors: []*raw.OperationErrorErrors{{Code: "INTERNAL_ERROR", Message: "boom"}}},
+				InstancesBulkInsertOperationMetadata: &raw.InstancesBulkInsertOperationMetadata{
+					PerLocationStatus: map[string]raw.BulkInsertOperationStatus{
+						"zones/us-east1-d": {CreatedVmCount: 1, TargetVmCount: 1, Status: "DONE"},
+					},
+				},
+			}
+		default:
+			op = raw.Operation{Name: "op-bulk-err", Status: "DONE"}
+		}
+		body, _ := googleapi.WithoutDataWrapper.JSONReader(op)
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	c := newBulkInsertComputeUtil(t, srv)
+	c.regionExplicit = "us-east1"
+	c.flexSelections = []string{"machine-type=n4d-standard-2", "machine-type=n2d-standard-2"}
+	d := withSSHKey(t, &Driver{Network: "default", FlexAdvanceOn: []string{"stockout,backend,unknown"}})
+
+	err := c.createInstanceViaBulkInsert(d)
+
+	require.Error(t, err)
+	assert.Equal(t, int32(1), bulkInsertCalls.Load())
+	assert.Equal(t, "us-east1-d", d.ResolvedZone)
+}
+
 func TestParseFailureClasses(t *testing.T) {
 	got, err := parseFailureClasses([]string{"stockout, Quota", "backend"})
 	require.NoError(t, err)
