@@ -135,11 +135,7 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			"class":        string(class),
 			"error":        attemptErr.Error(),
 		}).Warn("bulkInsert selection hit stockout-class failure, falling through")
-		if class == failureBackend || class == failureUnknown {
-			if err := health.releaseProbe(d, sel); err != nil {
-				log.Warnf("Could not release bulkInsert placement probe: %v", err)
-			}
-		} else if err := health.recordStockoutAt(d, sel, observedAt); err != nil {
+		if err := health.recordStockoutAt(d, sel, observedAt); err != nil {
 			log.Warnf("Could not record bulkInsert stockout health: %v", err)
 		}
 		failures = append(failures, fmt.Errorf("selection %d/%d (machine-type=%s, %s): %w", i+1, len(selections), sel.MachineType, class, attemptErr))

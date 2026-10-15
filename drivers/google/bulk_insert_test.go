@@ -995,12 +995,12 @@ func TestCreateInstanceViaBulkInsert_AdvanceOn(t *testing.T) {
 	t.Run("quota advances and cools when opted in", func(t *testing.T) {
 		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, run(t, []string{"stockout,quota"}, quotaBody, http.StatusForbidden))
 	})
-	t.Run("backend advances without cooling when opted in", func(t *testing.T) {
-		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4d-standard-2", "n2d-standard-2"}, run(t, []string{"stockout", "backend"}, backendBody, http.StatusServiceUnavailable))
+	t.Run("backend advances and cools when opted in", func(t *testing.T) {
+		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, run(t, []string{"stockout", "backend"}, backendBody, http.StatusServiceUnavailable))
 	})
-	t.Run("unknown advances without cooling when opted in", func(t *testing.T) {
+	t.Run("unknown advances and cools when opted in", func(t *testing.T) {
 		const body = `{"error":{"code":400,"message":"bad","errors":[{"reason":"invalid"}]}}`
-		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4d-standard-2", "n2d-standard-2"}, run(t, []string{"unknown"}, body, http.StatusBadRequest))
+		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, run(t, []string{"unknown"}, body, http.StatusBadRequest))
 	})
 }
 
