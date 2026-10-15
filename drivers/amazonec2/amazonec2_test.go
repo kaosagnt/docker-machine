@@ -295,8 +295,8 @@ func TestMetadataTokenResponseHopLimit(t *testing.T) {
 		Data: map[string]interface{}{
 			"name": "test",
 			"amazonec2-metadata-token-response-hop-limit": 1,
-			"amazonec2-region":                            "us-east-1",
-			"amazonec2-zone":                              "e",
+			"amazonec2-region": "us-east-1",
+			"amazonec2-zone":   "e",
 		},
 	}
 
