@@ -1045,12 +1045,42 @@ func TestCreateInstanceViaBulkInsert_PlacedVMDoesNotAdvance(t *testing.T) {
 	assert.Equal(t, "us-east1-d", d.ResolvedZone)
 }
 
+func TestCreateInstanceViaBulkInsert_WaitErrorDoesNotAdvance(t *testing.T) {
+	var bulkInsertCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/instances/bulkInsert"):
+			bulkInsertCalls.Add(1)
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(raw.Operation{Name: "op-accepted", Status: "RUNNING"})
+			fmt.Fprint(w, body)
+		case strings.Contains(r.URL.Path, "/operations/op-accepted"):
+			writeJSONError(w, http.StatusServiceUnavailable, `{"error":{"code":503,"message":"Internal error.","errors":[{"reason":"backendError"}]}}`)
+		default:
+			t.Errorf("unexpected call to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := newBulkInsertComputeUtil(t, srv)
+	c.regionExplicit = "us-east1"
+	c.flexSelections = []string{"machine-type=n4d-standard-2", "machine-type=n2d-standard-2,region=us-east5"}
+	d := withSSHKey(t, &Driver{Network: "default", FlexAdvanceOn: []string{"stockout,quota,backend,unknown"}})
+
+	err := c.createInstanceViaBulkInsert(d)
+
+	require.Error(t, err)
+	assert.Equal(t, int32(1), bulkInsertCalls.Load())
+	assert.Contains(t, err.Error(), "did not complete")
+}
+
 func TestParseFailureClasses(t *testing.T) {
 	got, err := parseFailureClasses([]string{"stockout, Quota", "backend"})
 	require.NoError(t, err)
 	assert.Equal(t, map[failureClass]bool{failureStockout: true, failureQuota: true, failureBackend: true}, got)
 	_, err = parseFailureClasses([]string{"stockout,rainbows"})
 	assert.EqualError(t, err, `unknown class "rainbows" (known: stockout, quota, backend, unknown)`)
+	_, err = parseFailureClasses([]string{"unresolved"})
+	assert.Error(t, err)
 }
 
 func TestZoneFromBulkInsertOp(t *testing.T) {

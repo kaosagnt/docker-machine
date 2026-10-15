@@ -35,6 +35,9 @@ const (
 	failureQuota    failureClass = "quota"
 	failureBackend  failureClass = "backend"
 	failureUnknown  failureClass = "unknown"
+	// failureUnresolved is an accepted operation whose outcome could not
+	// be read. The VM may exist, so it cannot be opted in.
+	failureUnresolved failureClass = "unresolved"
 )
 
 var failureClasses = []failureClass{failureStockout, failureQuota, failureBackend, failureUnknown}
@@ -118,9 +121,8 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			}
 			return c.finishPostCreate(d)
 		}
-		// A failed operation that placed the VM anyway must not be
-		// followed by another create under the same name. Remove deletes
-		// it through ResolvedZone.
+		// A VM that may exist must not be followed by another create under
+		// the same name. Remove deletes it through ResolvedZone.
 		if !advanceOn[class] || d.ResolvedZone != "" {
 			if err := health.releaseProbe(d, sel); err != nil {
 				log.Warnf("Could not release bulkInsert placement probe: %v", err)
@@ -224,7 +226,11 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 		if zone, ok := zoneFromBulkInsertOp(doneOp); ok {
 			d.ResolvedZone = zone
 		}
-		return classifyOpError(waitErr), fmt.Errorf("bulkInsert for %q did not complete: %w", c.instanceName, waitErr)
+		wrapped := fmt.Errorf("bulkInsert for %q did not complete: %w", c.instanceName, waitErr)
+		if doneOp == nil {
+			return failureUnresolved, wrapped
+		}
+		return classifyOpError(waitErr), wrapped
 	}
 
 	if zone, ok := zoneFromBulkInsertOp(doneOp); ok {
