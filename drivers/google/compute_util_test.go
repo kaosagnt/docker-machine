@@ -25,6 +25,13 @@ import (
 	"google.golang.org/api/option"
 )
 
+func TestNetworkProjectOf(t *testing.T) {
+	assert.Equal(t, "net", networkProjectOf("https://www.googleapis.com/compute/v1/projects/net/global/networks/shard"))
+	assert.Equal(t, "net", networkProjectOf("projects/net/global/networks/shard-1"))
+	assert.Equal(t, "", networkProjectOf("default"))
+	assert.Equal(t, "", networkProjectOf("global/networks/default"))
+}
+
 func TestServiceAccounts(t *testing.T) {
 	d := &Driver{ServiceAccount: "sa@p.iam.gserviceaccount.com", Scopes: "a,b"}
 	assert.Equal(t, []*raw.ServiceAccount{{Email: "sa@p.iam.gserviceaccount.com", Scopes: []string{"a", "b"}}}, serviceAccounts(d))

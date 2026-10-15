@@ -82,8 +82,17 @@ const (
 
 var (
 	networkRegex        = regexp.MustCompile(`/networks/`)
-	networkProjectRegex = regexp.MustCompile(apiURL + `(?P<project_name>[^/]+)/global/networks/(?P<network_name>[A-Za-z-]+)`)
+	networkProjectRegex = regexp.MustCompile(`(?:^|/)projects/(?P<project_name>[^/]+)/global/networks/(?P<network_name>[A-Za-z0-9-]+)$`)
 )
+
+// networkProjectOf returns the project in a network URL or relative path
+// (projects/<p>/global/networks/<n>), or "" for a bare network name.
+func networkProjectOf(network string) string {
+	if m := networkProjectRegex.FindStringSubmatch(network); m != nil {
+		return m[1]
+	}
+	return ""
+}
 
 // effectiveZone returns the zone per-instance API calls should target.
 // In bulkInsert mode Driver.Zone is the libmachine default and tells us
@@ -108,12 +117,10 @@ func newComputeUtil(driver *Driver) (*ComputeUtil, error) {
 		return nil, err
 	}
 
-	// networkProject is equals to the main project set for the driver, but if the network property is a complete api
-	// url we will override with the ones specified inside it. This will allow to setup runners in a project with a
-	// shared network
+	// A network in another project (shared VPC) also hosts the subnetworks.
 	networkProject := driver.Project
-	if matches := networkProjectRegex.FindStringSubmatch(driver.Network); len(matches) > 0 {
-		networkProject = matches[1]
+	if p := networkProjectOf(driver.Network); p != "" {
+		networkProject = p
 	}
 
 	zone := effectiveZone(driver)
