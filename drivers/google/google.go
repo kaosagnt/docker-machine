@@ -101,6 +101,10 @@ type Driver struct {
 	// First entry = rank 0; format documented on --google-flex-selection.
 	FlexSelections []string
 
+	// FlexAdvanceOn lists the failure classes (stockout, quota, backend)
+	// after which the next flex selection is tried. Empty means stockout.
+	FlexAdvanceOn []string
+
 	// FlexStockoutCooldown temporarily deprioritizes a flex selection after a
 	// recognized capacity failure. Zero preserves the configured order.
 	FlexStockoutCooldown time.Duration
@@ -366,6 +370,11 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "(Experimental) Candidate machine-type / disk spec for bulkInsert. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput override the boot disk for this entry; region, zone (repeatable, zone[:ALLOW|DENY]) and subnetwork override --google-region, --google-location-zone and --google-subnetwork for this entry. An entry in another region does not inherit --google-location-zone and must set subnetwork when --google-subnetwork is a full path; a bare subnetwork name resolves in the entry's region. Repeat in preference order: first occurrence is tried first, subsequent entries are tried only if the previous one fails with a stockout-class error. Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Optional in bulkInsert mode: when omitted, a single selection is synthesised from --google-machine-type and --google-disk-type.",
 			EnvVar: "GOOGLE_FLEX_SELECTION",
 		},
+		mcnflag.StringSliceFlag{
+			Name:   "google-flex-advance-on",
+			Usage:  "Failure classes after which the next flex selection is tried: stockout, quota, backend. Repeat or comma-separate. Default: stockout.",
+			EnvVar: "GOOGLE_FLEX_ADVANCE_ON",
+		},
 		mcnflag.StringFlag{
 			Name:   "google-flex-stockout-cooldown",
 			Usage:  "Temporarily try flex selections with recent stockout-class failures after other selections (0s disables).",
@@ -493,6 +502,10 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.BulkInsert = flags.Bool("google-bulk-insert")
 	d.Region = flags.String("google-region")
 	d.FlexSelections = flags.StringSlice("google-flex-selection")
+	d.FlexAdvanceOn = flags.StringSlice("google-flex-advance-on")
+	if _, err := parseFailureClasses(d.FlexAdvanceOn); err != nil {
+		return fmt.Errorf("--google-flex-advance-on: %w", err)
+	}
 	d.LocationZones = flags.StringSlice("google-location-zone")
 	var err error
 	d.FlexStockoutCooldown, err = time.ParseDuration(flags.String("google-flex-stockout-cooldown"))

@@ -33,30 +33,69 @@ var machineTypePathSegment = regexp.MustCompile(`/machineTypes/([^/]+)$`)
 
 const bootDeviceName = "boot"
 
-// Operation error codes GCE returns when it could not place the VM.
-// VM_MIN_COUNT_NOT_REACHED is the bulkInsert wrapper code at count=1.
-var stockoutErrorCodes = map[string]struct{}{
-	"VM_MIN_COUNT_NOT_REACHED":                  {},
-	"ZONE_RESOURCE_POOL_EXHAUSTED":              {},
-	"ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS": {},
+// failureClass says why a bulkInsert attempt failed. The empty class is
+// fatal for the create; the others may advance to the next selection
+// depending on --google-flex-advance-on.
+type failureClass string
+
+const (
+	failureStockout failureClass = "stockout"
+	failureQuota    failureClass = "quota"
+	failureBackend  failureClass = "backend"
+)
+
+var failureClasses = []failureClass{failureStockout, failureQuota, failureBackend}
+
+func parseFailureClasses(entries []string) (map[failureClass]bool, error) {
+	out := map[failureClass]bool{}
+	for _, entry := range entries {
+		for _, raw := range strings.Split(entry, ",") {
+			name := failureClass(strings.ToLower(strings.TrimSpace(raw)))
+			if name == "" {
+				continue
+			}
+			known := false
+			for _, c := range failureClasses {
+				known = known || c == name
+			}
+			if !known {
+				return nil, fmt.Errorf("unknown class %q (known: stockout, quota, backend)", raw)
+			}
+			out[name] = true
+		}
+	}
+	return out, nil
 }
 
-// Reasons on a synchronous BulkInsert rejection that mean the region
-// is out of capacity. insufficientCapacity is not in GCP's documented
-// error tables but is what GCE sends on a 503 for a region-wide
-// shortage.
-var stockoutAPIReasons = map[string]struct{}{
-	"insufficientCapacity":                      {},
-	"ZONE_RESOURCE_POOL_EXHAUSTED":              {},
-	"ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS": {},
-	"RESOURCE_POOL_EXHAUSTED":                   {},
-	"RESOURCE_AVAILABILITY":                     {},
+// Operation error codes by class. VM_MIN_COUNT_NOT_REACHED is the
+// bulkInsert wrapper code for a stockout at count=1.
+var opErrorClasses = map[string]failureClass{
+	"VM_MIN_COUNT_NOT_REACHED":                  failureStockout,
+	"ZONE_RESOURCE_POOL_EXHAUSTED":              failureStockout,
+	"ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS": failureStockout,
+	"QUOTA_EXCEEDED":                            failureQuota,
+	"INTERNAL_ERROR":                            failureBackend,
 }
 
-// A stockout reason is only trusted on one of these status codes.
-var stockoutAPIStatusCodes = map[int]struct{}{
-	http.StatusServiceUnavailable: {},
-	http.StatusTooManyRequests:    {},
+// Reasons on a synchronous BulkInsert rejection, by class.
+// insufficientCapacity is not in GCP's documented error tables but is
+// what GCE sends on a 503 for a region-wide shortage.
+var apiReasonClasses = map[string]failureClass{
+	"insufficientCapacity":                      failureStockout,
+	"ZONE_RESOURCE_POOL_EXHAUSTED":              failureStockout,
+	"ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS": failureStockout,
+	"RESOURCE_POOL_EXHAUSTED":                   failureStockout,
+	"RESOURCE_AVAILABILITY":                     failureStockout,
+	"quotaExceeded":                             failureQuota,
+	"backendError":                              failureBackend,
+	"internalError":                             failureBackend,
+}
+
+// A reason is only trusted on the status codes GCE uses for its class.
+var apiClassStatusCodes = map[failureClass]map[int]bool{
+	failureStockout: {http.StatusServiceUnavailable: true, http.StatusTooManyRequests: true},
+	failureQuota:    {http.StatusForbidden: true, http.StatusTooManyRequests: true},
+	failureBackend:  {http.StatusInternalServerError: true, http.StatusBadGateway: true, http.StatusServiceUnavailable: true, http.StatusGatewayTimeout: true},
 }
 
 const errorInfoTypeURL = "type.googleapis.com/google.rpc.ErrorInfo"
@@ -72,7 +111,8 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 
 	log.WithFields(log.Fields{"region": c.region(), "selections": len(selections)}).Info("Creating instance via bulkInsert")
 
-	stockoutErrs := make([]error, 0, len(selections))
+	advanceOn := d.flexAdvanceOn()
+	failures := make([]error, 0, len(selections))
 	for i, sel := range selections {
 		log.WithFields(log.Fields{
 			"attempt":      i + 1,
@@ -81,7 +121,7 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			"disk_type":    sel.DiskType,
 			"region":       c.selectionRegion(sel),
 		}).Info("bulkInsert attempt")
-		retryable, attemptErr := c.attemptBulkInsertForSelection(d, sel)
+		class, attemptErr := c.attemptBulkInsertForSelection(d, sel)
 		observedAt := time.Now()
 		if attemptErr == nil {
 			if err := health.recordPlacementAt(d, sel, observedAt); err != nil {
@@ -89,7 +129,7 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			}
 			return c.finishPostCreate(d)
 		}
-		if !retryable {
+		if class == "" || !advanceOn[class] {
 			if err := health.releaseProbe(d, sel); err != nil {
 				log.Warnf("Could not release bulkInsert placement probe: %v", err)
 			}
@@ -100,15 +140,30 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 			"attempts":     len(selections),
 			"machine_type": sel.MachineType,
 			"region":       c.selectionRegion(sel),
+			"class":        string(class),
 			"error":        attemptErr.Error(),
 		}).Warn("bulkInsert selection hit stockout-class failure, falling through")
-		if err := health.recordStockoutAt(d, sel, observedAt); err != nil {
+		// A backend error says nothing about capacity, so the selection
+		// is not cooled.
+		if class == failureBackend {
+			if err := health.releaseProbe(d, sel); err != nil {
+				log.Warnf("Could not release bulkInsert placement probe: %v", err)
+			}
+		} else if err := health.recordStockoutAt(d, sel, observedAt); err != nil {
 			log.Warnf("Could not record bulkInsert stockout health: %v", err)
 		}
-		stockoutErrs = append(stockoutErrs, fmt.Errorf("selection %d/%d (machine-type=%s): %w", i+1, len(selections), sel.MachineType, attemptErr))
+		failures = append(failures, fmt.Errorf("selection %d/%d (machine-type=%s, %s): %w", i+1, len(selections), sel.MachineType, class, attemptErr))
 	}
 
-	return fmt.Errorf("all %d bulkInsert selections failed with stockout-class errors: %w", len(selections), errors.Join(stockoutErrs...))
+	return fmt.Errorf("all %d bulkInsert selections failed with stockout-class errors: %w", len(selections), errors.Join(failures...))
+}
+
+func (d *Driver) flexAdvanceOn() map[failureClass]bool {
+	classes, err := parseFailureClasses(d.FlexAdvanceOn)
+	if err != nil || len(classes) == 0 {
+		return map[failureClass]bool{failureStockout: true}
+	}
+	return classes
 }
 
 // Without --google-flex-selection the single selection comes from
@@ -142,11 +197,12 @@ func (c *ComputeUtil) selectionRegion(sel flexSelection) string {
 	return sel.effectiveRegion(c.regionExplicit)
 }
 
-// retryable is true when the caller should try the next selection.
-func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection) (retryable bool, err error) {
+// The class is empty on success and on failures that are fatal for the
+// create.
+func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection) (failureClass, error) {
 	props, err := c.buildBulkInsertInstanceProperties(d, sel)
 	if err != nil {
-		return false, fmt.Errorf("building instance properties for bulkInsert: %w", err)
+		return "", fmt.Errorf("building instance properties for bulkInsert: %w", err)
 	}
 
 	region := c.selectionRegion(sel)
@@ -173,14 +229,10 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 
 	op, err := c.service.RegionInstances.BulkInsert(c.project, region, req).Do()
 	if err != nil {
-		wrapped := fmt.Errorf("bulkInsert rejected create for %q in %q: %w", c.instanceName, region, err)
-		if isStockoutAPIError(err) {
-			return true, wrapped
-		}
-		return false, wrapped
+		return classifyAPIError(err), fmt.Errorf("bulkInsert rejected create for %q in %q: %w", c.instanceName, region, err)
 	}
 	if op == nil || op.Name == "" {
-		return false, fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, region)
+		return "", fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, region)
 	}
 
 	log.WithField("operation", op.Name).Info("Waiting for bulkInsert operation")
@@ -191,18 +243,14 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 		if zone, ok := zoneFromBulkInsertOp(doneOp); ok {
 			d.ResolvedZone = zone
 		}
-		wrapped := fmt.Errorf("bulkInsert for %q did not complete: %w", c.instanceName, waitErr)
-		if isStockoutError(waitErr) {
-			return true, wrapped
-		}
-		return false, wrapped
+		return classifyOpError(waitErr), fmt.Errorf("bulkInsert for %q did not complete: %w", c.instanceName, waitErr)
 	}
 
 	if zone, ok := zoneFromBulkInsertOp(doneOp); ok {
 		c.placedZone = zone
 	}
 
-	return false, nil
+	return "", nil
 }
 
 // Name and zone belong to the bulkInsert envelope, not the properties.
@@ -495,38 +543,32 @@ func (d *Driver) validateFlexSelectionPlacement(sel flexSelection) error {
 	return nil
 }
 
-func isStockoutError(err error) bool {
-	if err == nil {
-		return false
-	}
+func classifyOpError(err error) failureClass {
 	var opErr *operationError
-	if !errors.As(err, &opErr) {
-		return false
+	if !errors.As(err, &opErr) || opErr == nil {
+		return ""
 	}
-	if opErr == nil || opErr.Code == "" {
-		return false
-	}
-	_, ok := stockoutErrorCodes[opErr.Code]
-	return ok
+	return opErrorClasses[opErr.Code]
 }
 
 // The reason can be in the legacy errors[] list or in a details[]
 // google.rpc.ErrorInfo entry, which the REST client leaves as an
 // untyped map.
-func isStockoutAPIError(err error) bool {
-	if err == nil {
-		return false
-	}
+func classifyAPIError(err error) failureClass {
 	var apiErr *googleapi.Error
 	if !errors.As(err, &apiErr) || apiErr == nil {
-		return false
+		return ""
 	}
-	if _, ok := stockoutAPIStatusCodes[apiErr.Code]; !ok {
-		return false
+	classOf := func(reason string) failureClass {
+		class := apiReasonClasses[reason]
+		if class == "" || !apiClassStatusCodes[class][apiErr.Code] {
+			return ""
+		}
+		return class
 	}
 	for _, e := range apiErr.Errors {
-		if _, ok := stockoutAPIReasons[e.Reason]; ok {
-			return true
+		if class := classOf(e.Reason); class != "" {
+			return class
 		}
 	}
 	for _, d := range apiErr.Details {
@@ -543,11 +585,11 @@ func isStockoutAPIError(err error) bool {
 		if !ok {
 			continue
 		}
-		if _, ok := stockoutAPIReasons[reason]; ok {
-			return true
+		if class := classOf(reason); class != "" {
+			return class
 		}
 	}
-	return false
+	return ""
 }
 
 // zoneFromBulkInsertOp returns the one zone with CreatedVmCount > 0 in

@@ -351,66 +351,74 @@ func TestBuildBulkInsertInstanceProperties_SelectionWithoutDiskOverride(t *testi
 	assert.Equal(t, int64(100), props.Disks[0].InitializeParams.ProvisionedThroughput)
 }
 
-func TestIsStockoutError(t *testing.T) {
+func TestClassifyOpError(t *testing.T) {
 	cases := map[string]struct {
 		err  error
-		want bool
+		want failureClass
 	}{
-		"nil":                                   {err: nil, want: false},
-		"plain error not retryable":             {err: errors.New("network blew up"), want: false},
-		"untyped operation error not retryable": {err: errors.New("operation error: {SOME_CODE [] x y [] []}"), want: false},
+		"nil":                                   {err: nil, want: ""},
+		"plain error not retryable":             {err: errors.New("network blew up"), want: ""},
+		"untyped operation error not retryable": {err: errors.New("operation error: {SOME_CODE [] x y [] []}"), want: ""},
 		"VM_MIN_COUNT_NOT_REACHED is retryable": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "VM_MIN_COUNT_NOT_REACHED"}},
-			want: true,
+			want: failureStockout,
 		},
 		"ZONE_RESOURCE_POOL_EXHAUSTED is retryable": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "ZONE_RESOURCE_POOL_EXHAUSTED"}},
-			want: true,
+			want: failureStockout,
 		},
 		"ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS is retryable": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS"}},
-			want: true,
+			want: failureStockout,
 		},
 		"wrapped op error still classified": {
 			err: fmt.Errorf("bulkInsert for %q did not complete: %w", "tm",
 				&operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "VM_MIN_COUNT_NOT_REACHED"}},
 			),
-			want: true,
+			want: failureStockout,
 		},
 		"unknown code not retryable": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "INVALID_FIELD_VALUE"}},
-			want: false,
+			want: "",
+		},
+		"QUOTA_EXCEEDED is quota": {
+			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "QUOTA_EXCEEDED"}},
+			want: failureQuota,
+		},
+		"INTERNAL_ERROR is backend": {
+			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "INTERNAL_ERROR"}},
+			want: failureBackend,
 		},
 		"empty code not retryable": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: ""}},
-			want: false,
+			want: "",
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, tc.want, isStockoutError(tc.err))
+			assert.Equal(t, tc.want, classifyOpError(tc.err))
 		})
 	}
 }
 
-func TestIsStockoutAPIError(t *testing.T) {
+func TestClassifyAPIError(t *testing.T) {
 	cases := map[string]struct {
 		err  error
-		want bool
+		want failureClass
 	}{
-		"nil":                      {err: nil, want: false},
-		"plain error not stockout": {err: errors.New("network blew up"), want: false},
+		"nil":                      {err: nil, want: ""},
+		"plain error not stockout": {err: errors.New("network blew up"), want: ""},
 		"operationError not an API error": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "VM_MIN_COUNT_NOT_REACHED"}},
-			want: false,
+			want: "",
 		},
 		"503 insufficientCapacity is stockout": {
 			err: &googleapi.Error{
 				Code:   503,
 				Errors: []googleapi.ErrorItem{{Reason: "insufficientCapacity", Message: "Region does not currently have sufficient capacity"}},
 			},
-			want: true,
+			want: failureStockout,
 		},
 		"wrapped 503 insufficientCapacity still classified": {
 			err: fmt.Errorf("bulkInsert rejected create for %q in %q: %w", "tm", "us-east1",
@@ -419,74 +427,88 @@ func TestIsStockoutAPIError(t *testing.T) {
 					Errors: []googleapi.ErrorItem{{Reason: "insufficientCapacity"}},
 				},
 			),
-			want: true,
+			want: failureStockout,
 		},
-		"503 with unrelated reason is fatal": {
+		"503 backendError is backend": {
 			err: &googleapi.Error{
 				Code:   503,
 				Errors: []googleapi.ErrorItem{{Reason: "backendError"}},
 			},
-			want: false,
+			want: failureBackend,
 		},
-		"403 quota is fatal": {
+		"403 backendError is fatal (wrong status)": {
+			err: &googleapi.Error{
+				Code:   403,
+				Errors: []googleapi.ErrorItem{{Reason: "backendError"}},
+			},
+			want: "",
+		},
+		"403 quotaExceeded is quota": {
 			err: &googleapi.Error{
 				Code:   403,
 				Errors: []googleapi.ErrorItem{{Reason: "quotaExceeded"}},
 			},
-			want: false,
+			want: failureQuota,
+		},
+		"503 with unknown reason is fatal": {
+			err: &googleapi.Error{
+				Code:   503,
+				Errors: []googleapi.ErrorItem{{Reason: "notFound"}},
+			},
+			want: "",
 		},
 		"api error with no error items is fatal": {
 			err:  &googleapi.Error{Code: 503},
-			want: false,
+			want: "",
 		},
 		"multiple reasons, one stockout, is stockout": {
 			err: &googleapi.Error{
 				Code:   503,
 				Errors: []googleapi.ErrorItem{{Reason: "rateLimitExceeded"}, {Reason: "insufficientCapacity"}},
 			},
-			want: true,
+			want: failureStockout,
 		},
 		"503 ZONE_RESOURCE_POOL_EXHAUSTED is stockout": {
 			err: &googleapi.Error{
 				Code:   503,
 				Errors: []googleapi.ErrorItem{{Reason: "ZONE_RESOURCE_POOL_EXHAUSTED"}},
 			},
-			want: true,
+			want: failureStockout,
 		},
 		"503 ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS is stockout": {
 			err: &googleapi.Error{
 				Code:   503,
 				Errors: []googleapi.ErrorItem{{Reason: "ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS"}},
 			},
-			want: true,
+			want: failureStockout,
 		},
 		"503 RESOURCE_POOL_EXHAUSTED (non-zonal) is stockout": {
 			err: &googleapi.Error{
 				Code:   503,
 				Errors: []googleapi.ErrorItem{{Reason: "RESOURCE_POOL_EXHAUSTED"}},
 			},
-			want: true,
+			want: failureStockout,
 		},
 		"429 RESOURCE_AVAILABILITY (AIP-193 canonical) is stockout": {
 			err: &googleapi.Error{
 				Code:   429,
 				Errors: []googleapi.ErrorItem{{Reason: "RESOURCE_AVAILABILITY"}},
 			},
-			want: true,
+			want: failureStockout,
 		},
-		"429 quotaExceeded is fatal (quota, not capacity)": {
+		"429 quotaExceeded is quota": {
 			err: &googleapi.Error{
 				Code:   429,
 				Errors: []googleapi.ErrorItem{{Reason: "quotaExceeded"}},
 			},
-			want: false,
+			want: failureQuota,
 		},
 		"403 with capacity-like reason is fatal (wrong status)": {
 			err: &googleapi.Error{
 				Code:   403,
 				Errors: []googleapi.ErrorItem{{Reason: "insufficientCapacity"}},
 			},
-			want: false,
+			want: "",
 		},
 		"capacity reason in Details ErrorInfo is stockout": {
 			err: &googleapi.Error{
@@ -499,7 +521,7 @@ func TestIsStockoutAPIError(t *testing.T) {
 					},
 				},
 			},
-			want: true,
+			want: failureStockout,
 		},
 		"non-capacity reason in Details ErrorInfo is fatal": {
 			err: &googleapi.Error{
@@ -512,7 +534,7 @@ func TestIsStockoutAPIError(t *testing.T) {
 					},
 				},
 			},
-			want: false,
+			want: "",
 		},
 		"capacity reason on wrong Details @type is fatal": {
 			err: &googleapi.Error{
@@ -524,7 +546,7 @@ func TestIsStockoutAPIError(t *testing.T) {
 					},
 				},
 			},
-			want: false,
+			want: "",
 		},
 		"capacity reason with absent Details @type is stockout (tolerant)": {
 			err: &googleapi.Error{
@@ -533,7 +555,7 @@ func TestIsStockoutAPIError(t *testing.T) {
 					map[string]interface{}{"reason": "RESOURCE_AVAILABILITY"},
 				},
 			},
-			want: true,
+			want: failureStockout,
 		},
 		"capacity reason with present non-string Details @type is fatal": {
 			err: &googleapi.Error{
@@ -542,7 +564,7 @@ func TestIsStockoutAPIError(t *testing.T) {
 					map[string]interface{}{"@type": 123, "reason": "RESOURCE_AVAILABILITY"},
 				},
 			},
-			want: false,
+			want: "",
 		},
 		"capacity reason with null Details @type is fatal": {
 			err: &googleapi.Error{
@@ -551,7 +573,7 @@ func TestIsStockoutAPIError(t *testing.T) {
 					map[string]interface{}{"@type": nil, "reason": "RESOURCE_AVAILABILITY"},
 				},
 			},
-			want: false,
+			want: "",
 		},
 		"Details capacity reason but wrong status is fatal": {
 			err: &googleapi.Error{
@@ -560,14 +582,14 @@ func TestIsStockoutAPIError(t *testing.T) {
 					map[string]interface{}{"reason": "RESOURCE_AVAILABILITY"},
 				},
 			},
-			want: false,
+			want: "",
 		},
 		"Details entry not a map is ignored (no panic)": {
 			err: &googleapi.Error{
 				Code:    503,
 				Details: []interface{}{"some string detail", 42},
 			},
-			want: false,
+			want: "",
 		},
 		"Details reason field not a string is ignored": {
 			err: &googleapi.Error{
@@ -576,13 +598,13 @@ func TestIsStockoutAPIError(t *testing.T) {
 					map[string]interface{}{"reason": 123},
 				},
 			},
-			want: false,
+			want: "",
 		},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, tc.want, isStockoutAPIError(tc.err))
+			assert.Equal(t, tc.want, classifyAPIError(tc.err))
 		})
 	}
 }
@@ -703,60 +725,54 @@ func newBulkInsertComputeUtil(t *testing.T, srv *httptest.Server) *ComputeUtil {
 	}
 }
 
-// TestAttemptBulkInsertForSelection_SyncStockoutIsRetryable is the
-// regression test for the 2026-06-22 incident: a synchronous HTTP 503
-// insufficientCapacity rejection from BulkInsert must be classified as
-// retryable so the loop advances to the next flex selection, instead of
-// aborting the whole create.
-func TestAttemptBulkInsertForSelection_SyncStockoutIsRetryable(t *testing.T) {
+func TestAttemptBulkInsertForSelection_SyncRejectionClass(t *testing.T) {
 	cases := map[string]struct {
-		status        int
-		body          string
-		wantRetryable bool
-		wantErr       bool
+		status    int
+		body      string
+		wantClass failureClass
+		wantErr   bool
 	}{
-		"503 insufficientCapacity -> retryable": {
-			status:        http.StatusServiceUnavailable,
-			body:          `{"error":{"code":503,"message":"Region does not currently have sufficient capacity for the requested resources.","errors":[{"reason":"insufficientCapacity","message":"insufficient capacity"}]}}`,
-			wantRetryable: true,
-			wantErr:       true,
+		"503 insufficientCapacity": {
+			status:    http.StatusServiceUnavailable,
+			body:      `{"error":{"code":503,"message":"Region does not currently have sufficient capacity for the requested resources.","errors":[{"reason":"insufficientCapacity","message":"insufficient capacity"}]}}`,
+			wantClass: failureStockout,
+			wantErr:   true,
 		},
-		"403 quotaExceeded -> fatal": {
-			status:        http.StatusForbidden,
-			body:          `{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded"}]}}`,
-			wantRetryable: false,
-			wantErr:       true,
+		"403 quotaExceeded": {
+			status:    http.StatusForbidden,
+			body:      `{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded"}]}}`,
+			wantClass: failureQuota,
+			wantErr:   true,
 		},
-		"503 backendError -> fatal": {
-			status:        http.StatusServiceUnavailable,
-			body:          `{"error":{"code":503,"message":"backend hiccup","errors":[{"reason":"backendError"}]}}`,
-			wantRetryable: false,
-			wantErr:       true,
+		"503 backendError": {
+			status:    http.StatusServiceUnavailable,
+			body:      `{"error":{"code":503,"message":"Internal error. Please try again or contact Google Support.","errors":[{"reason":"backendError"}]}}`,
+			wantClass: failureBackend,
+			wantErr:   true,
 		},
-		// 429 capacity, real-decoded through googleapi: proves the
-		// status gate accepts 429 end-to-end, not just 503.
-		"429 RESOURCE_AVAILABILITY -> retryable": {
-			status:        http.StatusTooManyRequests,
-			body:          `{"error":{"code":429,"message":"The zone does not have enough resources available.","errors":[{"reason":"RESOURCE_AVAILABILITY"}]}}`,
-			wantRetryable: true,
-			wantErr:       true,
+		"429 RESOURCE_AVAILABILITY": {
+			status:    http.StatusTooManyRequests,
+			body:      `{"error":{"code":429,"message":"The zone does not have enough resources available.","errors":[{"reason":"RESOURCE_AVAILABILITY"}]}}`,
+			wantClass: failureStockout,
+			wantErr:   true,
 		},
-		// 429 quota, real-decoded: must stay fatal (quota != capacity).
-		"429 quotaExceeded -> fatal": {
-			status:        http.StatusTooManyRequests,
-			body:          `{"error":{"code":429,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded"}]}}`,
-			wantRetryable: false,
-			wantErr:       true,
+		"429 quotaExceeded": {
+			status:    http.StatusTooManyRequests,
+			body:      `{"error":{"code":429,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded"}]}}`,
+			wantClass: failureQuota,
+			wantErr:   true,
 		},
-		// Capacity reason carried ONLY in details[] (google.rpc.ErrorInfo),
-		// with no legacy errors[]. This proves the real googleapi decoder
-		// produces the map[string]interface{} shape isStockoutAPIError
-		// reads from Details — the load-bearing assumption of that branch.
-		"429 capacity in details[] only -> retryable": {
-			status:        http.StatusTooManyRequests,
-			body:          `{"error":{"code":429,"message":"out of capacity","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RESOURCE_AVAILABILITY","domain":"compute.googleapis.com"}]}}`,
-			wantRetryable: true,
-			wantErr:       true,
+		"404 notFound": {
+			status:    http.StatusNotFound,
+			body:      `{"error":{"code":404,"message":"not found","errors":[{"reason":"notFound"}]}}`,
+			wantClass: "",
+			wantErr:   true,
+		},
+		"429 capacity in details[] only": {
+			status:    http.StatusTooManyRequests,
+			body:      `{"error":{"code":429,"message":"out of capacity","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RESOURCE_AVAILABILITY","domain":"compute.googleapis.com"}]}}`,
+			wantClass: failureStockout,
+			wantErr:   true,
 		},
 	}
 
@@ -768,9 +784,9 @@ func TestAttemptBulkInsertForSelection_SyncStockoutIsRetryable(t *testing.T) {
 			defer srv.Close()
 
 			c := newBulkInsertComputeUtil(t, srv)
-			retryable, err := c.attemptBulkInsertForSelection(withSSHKey(t, &Driver{Network: "default"}), flexSelection{MachineType: "n2d-standard-2"})
+			class, err := c.attemptBulkInsertForSelection(withSSHKey(t, &Driver{Network: "default"}), flexSelection{MachineType: "n2d-standard-2"})
 
-			assert.Equal(t, tc.wantRetryable, retryable)
+			assert.Equal(t, tc.wantClass, class)
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -927,6 +943,69 @@ func TestCreateInstanceViaBulkInsert_CooldownReordersNextCreate(t *testing.T) {
 	callsMu.Lock()
 	defer callsMu.Unlock()
 	assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, calls)
+}
+
+func TestCreateInstanceViaBulkInsert_AdvanceOn(t *testing.T) {
+	const quotaBody = `{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"quotaExceeded"}]}}`
+	const backendBody = `{"error":{"code":503,"message":"Internal error.","errors":[{"reason":"backendError"}]}}`
+
+	// run returns the machine types attempted across two creates. The
+	// first selection fails with body on every call, the second with a
+	// fatal 404, so the second create shows whether the first was cooled.
+	run := func(t *testing.T, advanceOn []string, body string, status int) []string {
+		var mu sync.Mutex
+		var calls []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req raw.BulkInsertInstanceResource
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			mu.Lock()
+			calls = append(calls, req.InstanceProperties.MachineType)
+			mu.Unlock()
+			if req.InstanceProperties.MachineType == "n4d-standard-2" {
+				writeJSONError(w, status, body)
+				return
+			}
+			writeJSONError(w, http.StatusNotFound, `{"error":{"code":404,"message":"not found","errors":[{"reason":"notFound"}]}}`)
+		}))
+		defer srv.Close()
+
+		d := NewDriver("runner-abc", t.TempDir())
+		writeSSHKey(t, d)
+		d.Network = "default"
+		d.Project = "p"
+		d.Region = "us-east1"
+		d.FlexStockoutCooldown = time.Minute
+		d.FlexAdvanceOn = advanceOn
+
+		for i := 0; i < 2; i++ {
+			c := newBulkInsertComputeUtil(t, srv)
+			c.regionExplicit = "us-east1"
+			c.flexSelections = []string{"machine-type=n4d-standard-2", "machine-type=n2d-standard-2"}
+			c.skipFirewall = true
+			_ = c.createInstanceViaBulkInsert(d)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
+	}
+
+	t.Run("quota is fatal by default", func(t *testing.T) {
+		assert.Equal(t, []string{"n4d-standard-2", "n4d-standard-2"}, run(t, nil, quotaBody, http.StatusForbidden))
+	})
+	t.Run("quota advances and cools when opted in", func(t *testing.T) {
+		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, run(t, []string{"stockout,quota"}, quotaBody, http.StatusForbidden))
+	})
+	t.Run("backend advances without cooling when opted in", func(t *testing.T) {
+		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n4d-standard-2", "n2d-standard-2"}, run(t, []string{"stockout", "backend"}, backendBody, http.StatusServiceUnavailable))
+	})
+}
+
+func TestParseFailureClasses(t *testing.T) {
+	got, err := parseFailureClasses([]string{"stockout, Quota", "backend"})
+	require.NoError(t, err)
+	assert.Equal(t, map[failureClass]bool{failureStockout: true, failureQuota: true, failureBackend: true}, got)
+	_, err = parseFailureClasses([]string{"stockout,rainbows"})
+	assert.EqualError(t, err, `unknown class "rainbows" (known: stockout, quota, backend)`)
 }
 
 func TestZoneFromBulkInsertOp(t *testing.T) {
@@ -1131,10 +1210,10 @@ func TestAttemptBulkInsertForSelection_SuccessSetsPlacedZone(t *testing.T) {
 	// Pre-seed a stale zone to prove the reset path clears it before use.
 	c.placedZone = "stale-zone-from-prior-attempt"
 
-	retryable, err := c.attemptBulkInsertForSelection(withSSHKey(t, &Driver{Network: "default"}), flexSelection{MachineType: "n4-standard-2"})
+	class, err := c.attemptBulkInsertForSelection(withSSHKey(t, &Driver{Network: "default"}), flexSelection{MachineType: "n4-standard-2"})
 
 	require.NoError(t, err)
-	assert.False(t, retryable)
+	assert.Equal(t, failureClass(""), class)
 	assert.Equal(t, "us-east1-d", c.placedZone, "placedZone must come from the operation's PerLocationStatus")
 }
 
@@ -1177,10 +1256,10 @@ func TestAttemptBulkInsertForSelection_SalvagesZoneOnOpError(t *testing.T) {
 	c.regionExplicit = "us-east1"
 	d := withSSHKey(t, &Driver{Network: "default"})
 
-	retryable, err := c.attemptBulkInsertForSelection(d, flexSelection{MachineType: "n4-standard-2"})
+	class, err := c.attemptBulkInsertForSelection(d, flexSelection{MachineType: "n4-standard-2"})
 
 	require.Error(t, err)
-	assert.False(t, retryable, "INTERNAL_ERROR is not stockout-class")
+	assert.Equal(t, failureBackend, class)
 	// The VM was placed; its zone must be recorded for cleanup.
 	assert.Equal(t, "us-east1-d", d.ResolvedZone, "placed zone must be salvaged onto the Driver for Remove")
 	// placedZone (the success-path field) must NOT be set on a failed op.
@@ -1287,13 +1366,13 @@ func TestAttemptBulkInsertForSelection_UsesSelectionRegion(t *testing.T) {
 	c.regionExplicit = "us-east1"
 	c.locationZones = []string{"us-east1-c"}
 
-	retryable, err := c.attemptBulkInsertForSelection(withSSHKey(t, &Driver{Network: "default"}), flexSelection{
+	class, err := c.attemptBulkInsertForSelection(withSSHKey(t, &Driver{Network: "default"}), flexSelection{
 		MachineType: "n4-standard-2",
 		Region:      "us-east4",
 		Zones:       []string{"us-east4-a"},
 	})
 	require.NoError(t, err)
-	assert.False(t, retryable)
+	assert.Equal(t, failureClass(""), class)
 	assert.Equal(t, "us-east4-a", c.placedZone)
 
 	require.Len(t, paths, 2)
