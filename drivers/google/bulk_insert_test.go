@@ -950,9 +950,9 @@ func TestCreateInstanceViaBulkInsert_AdvanceOn(t *testing.T) {
 	const backendBody = `{"error":{"code":503,"message":"Internal error.","errors":[{"reason":"backendError"}]}}`
 
 	// run returns the machine types attempted across two creates. The
-	// first selection fails with body on every call, the second with a
-	// fatal 404, so the second create shows whether the first was cooled.
-	run := func(t *testing.T, advanceOn []string, body string, status int) []string {
+	// first selection fails with body on every call, the second with
+	// secondBody, so the second create shows whether the first was cooled.
+	run := func(t *testing.T, advanceOn []string, body string, status int, secondBody string, secondStatus int) []string {
 		var mu sync.Mutex
 		var calls []string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -965,7 +965,7 @@ func TestCreateInstanceViaBulkInsert_AdvanceOn(t *testing.T) {
 				writeJSONError(w, status, body)
 				return
 			}
-			writeJSONError(w, http.StatusNotFound, `{"error":{"code":404,"message":"not found","errors":[{"reason":"notFound"}]}}`)
+			writeJSONError(w, secondStatus, secondBody)
 		}))
 		defer srv.Close()
 
@@ -989,18 +989,20 @@ func TestCreateInstanceViaBulkInsert_AdvanceOn(t *testing.T) {
 		return calls
 	}
 
+	const notFoundBody = `{"error":{"code":404,"message":"not found","errors":[{"reason":"notFound"}]}}`
+	const invalidBody = `{"error":{"code":400,"message":"bad","errors":[{"reason":"invalid"}]}}`
+
 	t.Run("quota is fatal by default", func(t *testing.T) {
-		assert.Equal(t, []string{"n4d-standard-2", "n4d-standard-2"}, run(t, nil, quotaBody, http.StatusForbidden))
+		assert.Equal(t, []string{"n4d-standard-2", "n4d-standard-2"}, run(t, nil, quotaBody, http.StatusForbidden, notFoundBody, http.StatusNotFound))
 	})
 	t.Run("quota advances and cools when opted in", func(t *testing.T) {
-		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, run(t, []string{"stockout,quota"}, quotaBody, http.StatusForbidden))
+		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, run(t, []string{"stockout,quota"}, quotaBody, http.StatusForbidden, notFoundBody, http.StatusNotFound))
 	})
 	t.Run("backend advances and cools when opted in", func(t *testing.T) {
-		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, run(t, []string{"stockout", "backend"}, backendBody, http.StatusServiceUnavailable))
+		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, run(t, []string{"stockout", "backend"}, backendBody, http.StatusServiceUnavailable, notFoundBody, http.StatusNotFound))
 	})
 	t.Run("unknown advances and cools when opted in", func(t *testing.T) {
-		const body = `{"error":{"code":400,"message":"bad","errors":[{"reason":"invalid"}]}}`
-		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, run(t, []string{"unknown"}, body, http.StatusBadRequest))
+		assert.Equal(t, []string{"n4d-standard-2", "n2d-standard-2", "n2d-standard-2"}, run(t, []string{"unknown"}, invalidBody, http.StatusBadRequest, quotaBody, http.StatusForbidden))
 	})
 }
 
