@@ -15,9 +15,11 @@ version)
 	;;
 notes)
 	# the lines between the heading and the next heading of the same or a
-	# higher level, without the blank lines around them
+	# higher level, without the blank lines around them. Trailing spaces on
+	# the heading are ignored, as version ignores them.
 	awk -v heading="## $2" '
-		$0 == heading { on = 1; next }
+		{ line = $0; sub(/[[:space:]]+$/, "", line) }
+		line == heading { on = 1; next }
 		on && (/^# / || /^## /) { exit }
 		on && /^[[:space:]]*$/ { if (seen) blank++; next }
 		on {
