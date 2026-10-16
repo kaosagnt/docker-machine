@@ -61,6 +61,17 @@
     when: never
   - <<: *if-canonical-default-branch
 
+.rules:release:check:
+  rules:
+  - <<: *if-merge-request-pipeline
+  - <<: *if-canonical-default-branch
+
+.rules:release:from-changelog:
+  rules:
+  - <<: *if-not-canonical-namespace
+    when: never
+  - <<: *if-canonical-default-branch
+
 .rules:release:rc:
   rules:
   - <<: *if-not-canonical-namespace

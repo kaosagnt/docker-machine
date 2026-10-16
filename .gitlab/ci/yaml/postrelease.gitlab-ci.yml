@@ -1,54 +1,55 @@
+.release:gitlab:
+  image: registry.gitlab.com/gitlab-org/cli:v1.119.0
+  variables:
+    GLAB_ENABLE_CI_AUTOLOGIN: "true"
+    S3_DOWNLOADS_URL: https://gitlab-docker-machine-downloads.s3.amazonaws.com
+
+# A merge that adds a release to CHANGELOG.md releases it: this creates the
+# release and its tag, and the tag's pipeline uploads the binaries. A
+# BLOCK_RELEASE CI/CD variable holds it; run a new pipeline on the default
+# branch to release once it's unset.
+release from changelog:
+  stage: postrelease
+  extends:
+  - .release:gitlab
+  - .rules:release:from-changelog
+  needs:
+  - release check
+  - job: validate
+    artifacts: false
+  - job: darwin amd64
+    artifacts: false
+  - job: linux amd64
+    artifacts: false
+  - job: linux arm
+    artifacts: false
+  - job: linux arm64
+    artifacts: false
+  - job: openbsd amd64
+    artifacts: false
+  - job: windows amd64
+    artifacts: false
+  script:
+  - |
+    tag=$(cat release/tag)
+    if [ -z "${tag}" ]; then
+      echo "Nothing to release: CHANGELOG.md's newest release is already tagged"
+    elif [ -n "${BLOCK_RELEASE:-}" ]; then
+      echo "Not releasing ${tag}: BLOCK_RELEASE is set: ${BLOCK_RELEASE}"
+    else
+      .gitlab/ci/scripts/release.sh "${tag}" "${CI_COMMIT_SHA}"
+    fi
+
+# A release tagged by hand gets its release here; for one made from the
+# changelog, the release already exists
 create GitLab Release entry:
   stage: postrelease
   extends:
+  - .release:gitlab
   - .rules:release:stable-or-rc
   dependencies: []
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
-  variables:
-    S3: https://gitlab-docker-machine-downloads.s3.amazonaws.com/$CI_COMMIT_TAG
   environment:
     name: stable/gitlab
     url: https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/releases
   script:
-  - echo "Releasing to $S3/index.html"
-  release:
-    name: '$CI_COMMIT_TAG'
-    description: |
-      New release of GitLab's fork of Docker Machine is out!
-    tag_name: '$CI_COMMIT_TAG'
-    ref: '$CI_COMMIT_TAG'
-    assets:
-      links:
-      # binaries
-      - name: 'binary: macOS amd64'
-        url: '$S3/docker-machine-Darwin-x86_64'
-        filepath: '/docker-machine-Darwin-x86_64'
-
-      - name: 'binary: Linux amd64'
-        url: '$S3/docker-machine-Linux-x86_64'
-        filepath: '/docker-machine-Linux-x86_64'
-      - name: 'binary: Linux arm'
-        url: '$S3/docker-machine-Linux-armhf'
-        filepath: '/docker-machine-Linux-armhf'
-      - name: 'binary: Linux arm64'
-        url: '$S3/docker-machine-Linux-aarch64'
-        filepath: '/docker-machine-Linux-aarch64'
-
-      - name: 'binary: OpenBSD amd64'
-        url: '$S3/docker-machine-OpenBSD-x86_64'
-        filepath: '/docker-machine-OpenBSD-x86_64'
-
-      - name: 'binary: Windows amd64'
-        url: '$S3/docker-machine-Windows-x86_64.exe'
-        filepath: '/docker-machine-Windows-x86_64.exe'
-
-      # Other files
-      - name: 'checksums'
-        url: '$S3/release.sha256'
-        filepath: '/release.sha256'
-      - name: 'checksums GPG signature'
-        url: '$S3/release.sha256.asc'
-        filepath: '/release.sha256.asc'
-      - name: 'other release artifacts'
-        url: '$S3/index.html'
-        filepath: '/index.html'
+  - .gitlab/ci/scripts/release.sh "${CI_COMMIT_TAG}" "${CI_COMMIT_SHA}"

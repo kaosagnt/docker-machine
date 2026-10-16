@@ -11,3 +11,21 @@ prepare done:
   stage: validate
   extends:
   - .common:stage-done
+
+# CHANGELOG.md's newest release must match version/version.go, and be newer
+# than every tag unless it's tagged already; on the default branch, an
+# untagged one is what the release job releases
+release check:
+  stage: validate
+  image: ${CI_IMAGE}
+  extends:
+  - .rules:release:check
+  # CI_IMAGE may be built in this pipeline's prepare stage
+  needs:
+  - prepare done
+  script:
+  - .gitlab/ci/scripts/release_check.sh
+  artifacts:
+    paths:
+    - release/
+    expire_in: 1 week
