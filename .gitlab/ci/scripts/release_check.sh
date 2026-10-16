@@ -46,4 +46,4 @@ if [[ -n "${newest}" ]]; then
 fi
 
 echo "${tag}" >release/tag
-echo "${tag} isn't tagged yet: the release job on ${CI_DEFAULT_BRANCH:-the default branch} releases it"
+echo "${tag} isn't tagged yet: the next scheduled pipeline on ${CI_DEFAULT_BRANCH:-the default branch} releases it"

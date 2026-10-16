@@ -16,9 +16,9 @@ Builds from this fork can be downloaded at https://gitlab-docker-machine-downloa
 
 ## Releases
 
-Each release is described in [CHANGELOG.md](CHANGELOG.md), newest first. To make one, add a `## v0.16.2-gitlab.<N>` section at the top of `CHANGELOG.md` and set `Version` in `version/version.go` to the same version, in the MR whose changes it releases. When that MR merges, the `release from changelog` job on the default branch creates the release and its tag, and the tag's pipeline uploads the binaries. The `release check` job fails an MR whose `CHANGELOG.md` and `version/version.go` disagree.
+Each release is described in [CHANGELOG.md](CHANGELOG.md), newest first. Until the newest section is tagged, it's the next release: an MR adds its changes there. When the newest section is already tagged, the MR starts the next one, a `## v0.16.2-gitlab.<N>` section at the top, and sets `Version` in `version/version.go` to match. The `release check` job fails an MR whose `CHANGELOG.md` and `version/version.go` disagree.
 
-To hold releases, set a `BLOCK_RELEASE` CI/CD variable. To release once it's unset, run a new pipeline on the default branch.
+A daily scheduled pipeline on the default branch releases the newest section if it isn't tagged yet: its `release from changelog` job creates the release and its tag, and the tag's pipeline uploads the binaries. To release sooner, run that job by hand in a pipeline on the default branch. To hold releases, set a `BLOCK_RELEASE` CI/CD variable; to release only by hand, deactivate the schedule.
 
 # Docker Machine
 

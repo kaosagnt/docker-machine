@@ -4,10 +4,10 @@
     GLAB_ENABLE_CI_AUTOLOGIN: "true"
     S3_DOWNLOADS_URL: https://gitlab-docker-machine-downloads.s3.amazonaws.com
 
-# A merge that adds a release to CHANGELOG.md releases it: this creates the
-# release and its tag, and the tag's pipeline uploads the binaries. A
-# BLOCK_RELEASE CI/CD variable holds it; run a new pipeline on the default
-# branch to release once it's unset.
+# Releases CHANGELOG.md's newest version when it isn't tagged yet: creates
+# the release and its tag, and the tag's pipeline uploads the binaries. It
+# runs in the default branch's scheduled pipeline, and by hand in any other
+# pipeline there. A BLOCK_RELEASE CI/CD variable holds it.
 release from changelog:
   stage: postrelease
   extends:

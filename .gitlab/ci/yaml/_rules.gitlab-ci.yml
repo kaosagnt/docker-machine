@@ -66,11 +66,16 @@
   - <<: *if-merge-request-pipeline
   - <<: *if-canonical-default-branch
 
+# A scheduled pipeline on the default branch releases; any other one on the
+# default branch can release by hand
 .rules:release:from-changelog:
   rules:
   - <<: *if-not-canonical-namespace
     when: never
+  - if: $CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PROJECT_PATH == "gitlab-org/ci-cd/docker-machine"
   - <<: *if-canonical-default-branch
+    when: manual
+    allow_failure: true
 
 .rules:release:rc:
   rules:

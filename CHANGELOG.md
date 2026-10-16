@@ -1,6 +1,6 @@
 # Changelog
 
-GitLab's fork of Docker Machine. Each `## v<version>` section is a release, newest first. A merge that adds a new one at the top, with `version/version.go` set to match, releases it: see [Releases](README.md#releases). The releases and their downloads are at https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/releases.
+GitLab's fork of Docker Machine. Each `## v<version>` section is a release, newest first. Until the newest one is tagged, it collects the changes for the next release: see [Releases](README.md#releases). The releases and their downloads are at https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/releases.
 
 ## v0.16.2-gitlab.62
 
