@@ -55,9 +55,12 @@
   - <<: *if-canonical-merge-request-pipeline
     when: manual
 
+# A scheduled pipeline builds the default branch only to release it
 .rules:release:beta:
   rules:
   - <<: *if-not-canonical-namespace
+    when: never
+  - if: $CI_PIPELINE_SOURCE == "schedule"
     when: never
   - <<: *if-canonical-default-branch
 

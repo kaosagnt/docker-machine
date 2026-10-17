@@ -5,9 +5,10 @@
     S3_DOWNLOADS_URL: https://gitlab-docker-machine-downloads.s3.amazonaws.com
 
 # Releases CHANGELOG.md's newest version when it isn't tagged yet: creates
-# the release and its tag, and the tag's pipeline uploads the binaries. It
-# runs in the default branch's scheduled pipeline, and by hand in any other
-# pipeline there. A BLOCK_RELEASE CI/CD variable holds it.
+# the release, without download links, and its tag. The tag's pipeline
+# uploads the binaries and then adds the links. It runs in the default
+# branch's scheduled pipeline, and by hand in any other pipeline there. A
+# BLOCK_RELEASE CI/CD variable holds it.
 release from changelog:
   stage: postrelease
   extends:
@@ -40,8 +41,8 @@ release from changelog:
       .gitlab/ci/scripts/release.sh "${tag}" "${CI_COMMIT_SHA}"
     fi
 
-# A release tagged by hand gets its release here; for one made from the
-# changelog, the release already exists
+# Runs after the binaries are uploaded, and adds the release's download
+# links. A tag pushed by hand gets its release here too.
 create GitLab Release entry:
   stage: postrelease
   extends:
@@ -52,4 +53,4 @@ create GitLab Release entry:
     name: stable/gitlab
     url: https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/releases
   script:
-  - .gitlab/ci/scripts/release.sh "${CI_COMMIT_TAG}" "${CI_COMMIT_SHA}"
+  - .gitlab/ci/scripts/release.sh "${CI_COMMIT_TAG}" "${CI_COMMIT_SHA}" --assets
