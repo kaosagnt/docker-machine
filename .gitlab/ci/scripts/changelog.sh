@@ -2,7 +2,7 @@
 # Reads CHANGELOG.md, or the given file, whose "## v<version>" headings are
 # the releases, newest first.
 #
-#   changelog.sh version             the newest release's heading, without
+#   changelog.sh version [file]      the newest release's heading, without
 #                                    "## "
 #   changelog.sh notes <tag> [file]  that release's section, without its
 #                                    heading
@@ -13,7 +13,7 @@ set -e
 
 case "$1" in
 version)
-	sed -n 's/^## \(v.*[^[:space:]]\)[[:space:]]*$/\1/p' CHANGELOG.md | head -n 1
+	sed -n 's/^## \(v.*[^[:space:]]\)[[:space:]]*$/\1/p' "${2:-CHANGELOG.md}" | head -n 1
 	;;
 notes)
 	# the lines between the heading and the next heading of the same or a
@@ -31,7 +31,7 @@ notes)
 	' "${3:-CHANGELOG.md}"
 	;;
 *)
-	echo "usage: $0 version | notes <tag> [file]" >&2
+	echo "usage: $0 version [file] | notes <tag> [file]" >&2
 	exit 2
 	;;
 esac
