@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -407,11 +408,22 @@ func TestClassifyAPIError(t *testing.T) {
 		err  error
 		want failureClass
 	}{
-		"nil":                      {err: nil, want: failureUnknown},
-		"plain error not stockout": {err: errors.New("network blew up"), want: failureUnknown},
+		"nil":                         {err: nil, want: failureUnresolved},
+		"plain error has no reply":    {err: errors.New("network blew up"), want: failureUnresolved},
+		"EOF after POST has no reply": {err: fmt.Errorf("Post \"https://compute.googleapis.com/bulkInsert\": %w", io.EOF), want: failureUnresolved},
+		"504 may have completed":      {err: &googleapi.Error{Code: 504, Errors: []googleapi.ErrorItem{{Reason: "backendError"}}}, want: failureUnresolved},
+		"stockout reason after backend reason": {
+			err:  &googleapi.Error{Code: 503, Errors: []googleapi.ErrorItem{{Reason: "backendError"}, {Reason: "insufficientCapacity"}}},
+			want: failureStockout,
+		},
+		"stockout reason in details after backend reason": {
+			err: &googleapi.Error{Code: 503, Errors: []googleapi.ErrorItem{{Reason: "backendError"}},
+				Details: []interface{}{map[string]interface{}{"@type": errorInfoTypeURL, "reason": "RESOURCE_AVAILABILITY"}}},
+			want: failureStockout,
+		},
 		"operationError not an API error": {
 			err:  &operationError{OperationErrorErrors: &raw.OperationErrorErrors{Code: "VM_MIN_COUNT_NOT_REACHED"}},
-			want: failureUnknown,
+			want: failureUnresolved,
 		},
 		"503 insufficientCapacity is stockout": {
 			err: &googleapi.Error{
@@ -1071,6 +1083,67 @@ func TestCreateInstanceViaBulkInsert_WaitErrorDoesNotAdvance(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, int32(1), bulkInsertCalls.Load())
 	assert.Contains(t, err.Error(), "did not complete")
+}
+
+func TestFlexAdvanceOn_UnknownSavedClassIsIgnored(t *testing.T) {
+	d := &Driver{FlexAdvanceOn: []string{"stockout,quota,typo"}}
+	assert.Equal(t, map[failureClass]bool{failureStockout: true, failureQuota: true}, d.flexAdvanceOn())
+	assert.Equal(t, map[failureClass]bool{failureStockout: true}, (&Driver{FlexAdvanceOn: []string{"typo"}}).flexAdvanceOn())
+}
+
+// runLoop drives one create over two selections against handler and
+// returns the number of bulkInsert calls.
+func runLoop(t *testing.T, advanceOn []string, handler http.HandlerFunc) (int32, error) {
+	t.Helper()
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/instances/bulkInsert") {
+			calls.Add(1)
+		}
+		handler(w, r)
+	}))
+	defer srv.Close()
+	c := newBulkInsertComputeUtil(t, srv)
+	c.regionExplicit = "us-east1"
+	c.flexSelections = []string{"machine-type=n4d-standard-2", "machine-type=n2d-standard-2,region=us-east5"}
+	d := withSSHKey(t, &Driver{Network: "default", FlexAdvanceOn: advanceOn})
+	err := c.createInstanceViaBulkInsert(d)
+	return calls.Load(), err
+}
+
+func TestCreateInstanceViaBulkInsert_NoReplyDoesNotAdvance(t *testing.T) {
+	t.Run("connection closed after POST", func(t *testing.T) {
+		calls, err := runLoop(t, []string{"stockout,quota,backend,unknown"}, func(w http.ResponseWriter, r *http.Request) {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			require.NoError(t, err)
+			_ = conn.Close()
+		})
+		require.Error(t, err)
+		assert.Equal(t, int32(1), calls)
+	})
+	t.Run("504", func(t *testing.T) {
+		calls, err := runLoop(t, []string{"stockout,quota,backend,unknown"}, func(w http.ResponseWriter, r *http.Request) {
+			writeJSONError(w, http.StatusGatewayTimeout, `{"error":{"code":504,"message":"timeout","errors":[{"reason":"backendError"}]}}`)
+		})
+		require.Error(t, err)
+		assert.Equal(t, int32(1), calls)
+	})
+	t.Run("200 without an operation name", func(t *testing.T) {
+		calls, err := runLoop(t, []string{"stockout,quota,backend,unknown"}, func(w http.ResponseWriter, r *http.Request) {
+			body, _ := googleapi.WithoutDataWrapper.JSONReader(raw.Operation{})
+			fmt.Fprint(w, body)
+		})
+		require.Error(t, err)
+		assert.Equal(t, int32(1), calls)
+	})
+}
+
+func TestCreateInstanceViaBulkInsert_ListReplacesDefault(t *testing.T) {
+	calls, err := runLoop(t, []string{"quota"}, func(w http.ResponseWriter, r *http.Request) {
+		writeJSONError(w, http.StatusServiceUnavailable, stockout503Body)
+	})
+	require.Error(t, err)
+	assert.Equal(t, int32(1), calls, "stockout is not in the list, so it is fatal")
 }
 
 func TestParseFailureClasses(t *testing.T) {

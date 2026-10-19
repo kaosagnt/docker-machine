@@ -358,7 +358,7 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.BoolFlag{
 			Name:   "google-bulk-insert",
-			Usage:  "(Experimental) Provision via RegionInstances.BulkInsert with a multi-zone LocationPolicy rather than zonal Instances.Insert. The driver issues one BulkInsert per --google-flex-selection entry in preference order, advancing to the next selection on stockout-class failures (VM_MIN_COUNT_NOT_REACHED, ZONE_RESOURCE_POOL_EXHAUSTED). With no --google-flex-selection a single selection is synthesised from --google-machine-type / --google-disk-type. Requires --google-region; mutually exclusive with --google-zone.",
+			Usage:  "(Experimental) Provision via RegionInstances.BulkInsert with a multi-zone LocationPolicy rather than zonal Instances.Insert. The driver issues one BulkInsert per --google-flex-selection entry in preference order, advancing to the next selection on the failure classes in --google-flex-advance-on (stockout by default). With no --google-flex-selection a single selection is synthesised from --google-machine-type / --google-disk-type. Requires --google-region; mutually exclusive with --google-zone.",
 			EnvVar: "GOOGLE_BULK_INSERT",
 		},
 		mcnflag.StringFlag{
@@ -368,17 +368,17 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-flex-selection",
-			Usage:  "(Experimental) Candidate machine-type / disk spec for bulkInsert. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput override the boot disk for this entry; region, zone (repeatable, zone[:ALLOW|DENY]) and subnetwork override --google-region, --google-location-zone and --google-subnetwork for this entry. An entry in another region does not inherit --google-location-zone and must set subnetwork when --google-subnetwork is a full path; a bare subnetwork name resolves in the entry's region. Repeat in preference order: first occurrence is tried first, subsequent entries are tried only if the previous one fails with a stockout-class error. Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Optional in bulkInsert mode: when omitted, a single selection is synthesised from --google-machine-type and --google-disk-type.",
+			Usage:  "(Experimental) Candidate machine-type / disk spec for bulkInsert. Format: k=v[,k=v...]. machine-type is required; disk-type/disk-iops/disk-throughput override the boot disk for this entry; region, zone (repeatable, zone[:ALLOW|DENY]) and subnetwork override --google-region, --google-location-zone and --google-subnetwork for this entry. An entry in another region does not inherit --google-location-zone and must set subnetwork when --google-subnetwork is a full path; a bare subnetwork name resolves in the entry's region. Repeat in preference order: first occurrence is tried first, subsequent entries are tried only if the previous one fails with a class listed in --google-flex-advance-on. Example: machine-type=n4-standard-2,disk-type=hyperdisk-balanced,disk-iops=3000,disk-throughput=140. Optional in bulkInsert mode: when omitted, a single selection is synthesised from --google-machine-type and --google-disk-type.",
 			EnvVar: "GOOGLE_FLEX_SELECTION",
 		},
 		mcnflag.StringSliceFlag{
 			Name:   "google-flex-advance-on",
-			Usage:  "Failure classes after which the next flex selection is tried: stockout, quota, backend, unknown. Repeat or comma-separate. Default: stockout.",
+			Usage:  "Failure classes after which the next flex selection is tried: stockout, quota, backend, unknown. Repeat or comma-separate. The list replaces the default, so include stockout to keep it. Default: stockout.",
 			EnvVar: "GOOGLE_FLEX_ADVANCE_ON",
 		},
 		mcnflag.StringFlag{
 			Name:   "google-flex-stockout-cooldown",
-			Usage:  "Temporarily try flex selections with recent stockout-class failures after other selections (0s disables).",
+			Usage:  "Temporarily try flex selections with recent failures of a class in --google-flex-advance-on after other selections (0s disables).",
 			EnvVar: "GOOGLE_FLEX_STOCKOUT_COOLDOWN",
 			Value:  "0s",
 		},

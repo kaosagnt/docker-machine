@@ -43,24 +43,33 @@ const (
 var failureClasses = []failureClass{failureStockout, failureQuota, failureBackend, failureUnknown}
 
 func parseFailureClasses(entries []string) (map[failureClass]bool, error) {
-	out := map[failureClass]bool{}
+	out, unknown := splitFailureClasses(entries)
+	if len(unknown) > 0 {
+		return nil, fmt.Errorf("unknown class %q (known: stockout, quota, backend, unknown)", unknown[0])
+	}
+	return out, nil
+}
+
+func splitFailureClasses(entries []string) (known map[failureClass]bool, unknown []string) {
+	known = map[failureClass]bool{}
 	for _, entry := range entries {
 		for _, raw := range strings.Split(entry, ",") {
 			name := failureClass(strings.ToLower(strings.TrimSpace(raw)))
 			if name == "" {
 				continue
 			}
-			known := false
+			isKnown := false
 			for _, c := range failureClasses {
-				known = known || c == name
+				isKnown = isKnown || c == name
 			}
-			if !known {
-				return nil, fmt.Errorf("unknown class %q (known: stockout, quota, backend, unknown)", raw)
+			if !isKnown {
+				unknown = append(unknown, raw)
+				continue
 			}
-			out[name] = true
+			known[name] = true
 		}
 	}
-	return out, nil
+	return known, unknown
 }
 
 var opErrorClasses = map[string]failureClass{
@@ -84,10 +93,12 @@ var apiReasonClasses = map[string]failureClass{
 	"internalError":                             failureBackend,
 }
 
+// 504 is DEADLINE_EXCEEDED, which Google documents as possibly returned
+// after the operation completed, so it is unresolved rather than backend.
 var apiClassStatusCodes = map[failureClass]map[int]bool{
 	failureStockout: {http.StatusServiceUnavailable: true, http.StatusTooManyRequests: true},
 	failureQuota:    {http.StatusForbidden: true, http.StatusTooManyRequests: true},
-	failureBackend:  {http.StatusInternalServerError: true, http.StatusBadGateway: true, http.StatusServiceUnavailable: true, http.StatusGatewayTimeout: true},
+	failureBackend:  {http.StatusInternalServerError: true, http.StatusBadGateway: true, http.StatusServiceUnavailable: true},
 }
 
 const errorInfoTypeURL = "type.googleapis.com/google.rpc.ErrorInfo"
@@ -146,9 +157,14 @@ func (c *ComputeUtil) createInstanceViaBulkInsert(d *Driver) error {
 	return fmt.Errorf("all %d bulkInsert selections failed with stockout-class errors: %w", len(selections), errors.Join(failures...))
 }
 
+// The flag is validated at SetConfigFromFlags. A saved config.json from
+// another driver version may still hold a class this one does not know.
 func (d *Driver) flexAdvanceOn() map[failureClass]bool {
-	classes, err := parseFailureClasses(d.FlexAdvanceOn)
-	if err != nil || len(classes) == 0 {
+	classes, unknown := splitFailureClasses(d.FlexAdvanceOn)
+	if len(unknown) > 0 {
+		log.Warnf("--google-flex-advance-on: ignoring unknown classes %q", unknown)
+	}
+	if len(classes) == 0 {
 		return map[failureClass]bool{failureStockout: true}
 	}
 	return classes
@@ -216,7 +232,7 @@ func (c *ComputeUtil) attemptBulkInsertForSelection(d *Driver, sel flexSelection
 		return classifyAPIError(err), fmt.Errorf("bulkInsert rejected create for %q in %q: %w", c.instanceName, region, err)
 	}
 	if op == nil || op.Name == "" {
-		return failureUnknown, fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, region)
+		return failureUnresolved, fmt.Errorf("bulkInsert for %q in %q returned no operation name", c.instanceName, region)
 	}
 
 	log.WithField("operation", op.Name).Info("Waiting for bulkInsert operation")
@@ -535,10 +551,16 @@ func classifyOpError(err error) failureClass {
 }
 
 // The REST client leaves details[] entries as untyped maps.
+// An error without a response from GCE (connection dropped after the
+// POST) is unresolved: the request may have been accepted. Among the
+// reasons GCE did send, stockout wins, as on main before the classes.
 func classifyAPIError(err error) failureClass {
 	var apiErr *googleapi.Error
 	if !errors.As(err, &apiErr) || apiErr == nil {
-		return failureUnknown
+		return failureUnresolved
+	}
+	if apiErr.Code == http.StatusGatewayTimeout {
+		return failureUnresolved
 	}
 	classOf := func(reason string) failureClass {
 		class := apiReasonClasses[reason]
@@ -547,10 +569,15 @@ func classifyAPIError(err error) failureClass {
 		}
 		return class
 	}
-	for _, e := range apiErr.Errors {
-		if class := classOf(e.Reason); class != "" {
-			return class
+	found := failureUnknown
+	consider := func(reason string) {
+		class := classOf(reason)
+		if class == failureStockout || found == failureUnknown && class != "" {
+			found = class
 		}
+	}
+	for _, e := range apiErr.Errors {
+		consider(e.Reason)
 	}
 	for _, d := range apiErr.Details {
 		m, ok := d.(map[string]interface{})
@@ -562,15 +589,11 @@ func classifyAPIError(err error) failureClass {
 				continue
 			}
 		}
-		reason, ok := m["reason"].(string)
-		if !ok {
-			continue
-		}
-		if class := classOf(reason); class != "" {
-			return class
+		if reason, ok := m["reason"].(string); ok {
+			consider(reason)
 		}
 	}
-	return failureUnknown
+	return found
 }
 
 func zoneFromBulkInsertOp(op *raw.Operation) (zone string, ok bool) {
