@@ -14,6 +14,12 @@ We do not plan to add new features to the Docker Machine fork.  The intent is on
 
 Builds from this fork can be downloaded at https://gitlab-docker-machine-downloads.s3.amazonaws.com/main/index.html
 
+## Releases
+
+Each release is described in [CHANGELOG.md](CHANGELOG.md), newest first. Until the newest section is tagged, it's the next release: an MR adds its changes there. When the newest section is already tagged, the MR starts the next one, a `## v0.16.2-gitlab.<N>` section at the top, and sets `Version` in `version/version.go` to match. The `release check` job fails an MR whose `CHANGELOG.md` and `version/version.go` disagree, or that changes a section already released. Release candidates are tagged by hand and have no section.
+
+A daily scheduled pipeline on the default branch releases the newest section if it isn't tagged yet. The pipeline builds the binaries first, even when there's nothing to release, so only a commit that builds is tagged. Its `release from changelog` job then creates the release and its tag. The tag's pipeline uploads the binaries and adds the release's download links. To release sooner, run that job by hand in a pipeline on the default branch. To hold releases, set a `BLOCK_RELEASE` CI/CD variable; to release only by hand, deactivate the schedule.
+
 # Docker Machine
 
 ![](https://docs.docker.com/machine/img/logo.png)
