@@ -2,6 +2,10 @@
 
 GitLab's fork of Docker Machine. Each `## v<version>` section is a release, newest first. Until the newest one is tagged, it collects the changes for the next release: see [Releases](README.md#releases). The releases and their downloads are at https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/releases.
 
+## v0.16.2-gitlab.64
+
+- Update Go to 1.27.3, from 1.27.2. This fixes security issues in `crypto/x509`: see https://go.dev/doc/devel/release#go1.27.3. See https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/merge_requests/210.
+
 ## v0.16.2-gitlab.62
 
 - Update Go to 1.27.2, from 1.26.5. This fixes 21 known vulnerabilities, including GO-2026-5026 (CVE-2026-39821), GO-2026-5942 (CVE-2026-46600), GO-2026-5972 (CVE-2026-33818), GO-2026-6088 (CVE-2026-56859), GO-2026-6089 (CVE-2026-56853) and GO-2026-6090 (CVE-2026-56862). With Go 1.27, the macOS binary needs macOS 13 Ventura or later. See https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/merge_requests/206.
