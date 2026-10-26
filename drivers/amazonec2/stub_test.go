@@ -153,6 +153,23 @@ func (f *fakeEC2DescribeInstance) DescribeInstances(input *ec2.DescribeInstances
 
 }
 
+type fakeEC2RunInstancesRecorder struct {
+	*fakeEC2
+	mock.Mock
+}
+
+func (f *fakeEC2RunInstancesRecorder) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.ImportKeyPairOutput, error) {
+	args := f.Called(input)
+	output, _ := args.Get(0).(*ec2.ImportKeyPairOutput)
+	return output, args.Error(1)
+}
+
+func (f *fakeEC2RunInstancesRecorder) RunInstances(input *ec2.RunInstancesInput) (*ec2.Reservation, error) {
+	args := f.Called(input)
+	output, _ := args.Get(0).(*ec2.Reservation)
+	return output, args.Error(1)
+}
+
 func NewTestDriver() *Driver {
 	driver := NewDriver("machineFoo", "path")
 	driver.clientFactory = func() Ec2Client {

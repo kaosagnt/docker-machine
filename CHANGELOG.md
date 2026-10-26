@@ -2,6 +2,10 @@
 
 GitLab's fork of Docker Machine. Each `## v<version>` section is a release, newest first. Until the newest one is tagged, it collects the changes for the next release: see [Releases](README.md#releases). The releases and their downloads are at https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/releases.
 
+## v0.16.2-gitlab.65
+
+- Fix `--amazonec2-request-spot-instance` with an empty `--amazonec2-spot-price=` failing every create with `InvalidParameterValue: The value '' is invalid for parameter MaxPrice`. An empty spot price now sends no maximum price, and AWS charges the current Spot price. A configured price, and the `0.50` default, are sent as before. See https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/merge_requests/201.
+
 ## v0.16.2-gitlab.64
 
 - Update Go to 1.27.3, from 1.27.2. This fixes security issues in `crypto/x509`: see https://go.dev/doc/devel/release#go1.27.3. See https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/merge_requests/210.
