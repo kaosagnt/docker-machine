@@ -67,7 +67,7 @@ You can use environment variables:
 -   `--amazonec2-iam-instance-profile`: The AWS IAM role name to be used as the instance profile.
 -   `--amazonec2-ssh-user`: The SSH Login username, which must match the default SSH user set in the ami used.
 -   `--amazonec2-request-spot-instance`: Use spot instances.
--   `--amazonec2-spot-price`: Spot instance bid price (in dollars). Require the `--amazonec2-request-spot-instance` flag.
+-   `--amazonec2-spot-price`: Spot instance bid price (in dollars). Require the `--amazonec2-request-spot-instance` flag. An empty value (`--amazonec2-spot-price=`) sends no maximum price, and AWS charges the current Spot price.
 -   `--amazonec2-use-private-address`: Use the private IP address for docker-machine, but still create a public IP address.
 -   `--amazonec2-private-address-only`: Use the private IP address only.
 -   `--amazonec2-monitoring`: Enable CloudWatch Monitoring.

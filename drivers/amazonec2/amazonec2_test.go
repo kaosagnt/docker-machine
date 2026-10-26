@@ -700,3 +700,57 @@ func TestGetInstance(t *testing.T) {
 		})
 	}
 }
+
+func TestSpotInstanceRequestMaxPrice(t *testing.T) {
+	errRunInstances := errors.New("fake RunInstances error")
+
+	tests := []struct {
+		name            string
+		spotPrice       string
+		wantSpotOptions *ec2.SpotMarketOptions
+	}{
+		{
+			name:            "spot price is sent as the maximum price",
+			spotPrice:       "0.25",
+			wantSpotOptions: &ec2.SpotMarketOptions{MaxPrice: aws.String("0.25")},
+		},
+		{
+			name:            "empty spot price sends no maximum price",
+			spotPrice:       "",
+			wantSpotOptions: &ec2.SpotMarketOptions{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := fakeEC2RunInstancesRecorder{}
+			defer recorder.AssertExpectations(t)
+
+			var runInstancesInput *ec2.RunInstancesInput
+			recorder.On("ImportKeyPair", mock.Anything).
+				Return(&ec2.ImportKeyPairOutput{}, nil).
+				Once()
+			recorder.On("RunInstances", mock.Anything).
+				Run(func(args mock.Arguments) {
+					runInstancesInput = args.Get(0).(*ec2.RunInstancesInput)
+				}).
+				Return(nil, errRunInstances).
+				Once()
+
+			driver := NewCustomTestDriver(&recorder)
+			driver.StorePath = t.TempDir()
+			assert.NoError(t, os.MkdirAll(driver.ResolveStorePath(""), 0700))
+			driver.SecurityGroupNames = nil
+			driver.RequestSpotInstance = true
+			driver.SpotPrice = tt.spotPrice
+
+			err := driver.innerCreate()
+
+			assert.ErrorContains(t, err, errRunInstances.Error())
+			if assert.NotNil(t, runInstancesInput) && assert.NotNil(t, runInstancesInput.InstanceMarketOptions) {
+				assert.Equal(t, "spot", aws.StringValue(runInstancesInput.InstanceMarketOptions.MarketType))
+				assert.Equal(t, tt.wantSpotOptions, runInstancesInput.InstanceMarketOptions.SpotOptions)
+			}
+		})
+	}
+}
