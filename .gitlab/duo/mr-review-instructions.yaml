@@ -1,0 +1,31 @@
+---
+# Custom review criteria that GitLab Duo applies to the matching files when it
+# reviews a merge request. Instructions are grouped by name and can target
+# several file patterns using glob syntax.
+instructions:
+  - name: Changelog entry
+    fileFilters:
+      - "**/*.go"
+      - "!**/*_test.go"
+      - "go.mod"
+      # These set the Go version the binaries are built with
+      - "Dockerfile"
+      - ".gitlab/ci/Dockerfile"
+      - ".gitlab/ci/yaml/_common.gitlab-ci.yml"
+    instructions: |
+      `CHANGELOG.md` describes each release in a `## v<version>` section, newest first. The newest section is the next
+      release until its tag exists.
+
+      1. Decide whether the merge request needs a changelog entry:
+         - If it already adds one to `CHANGELOG.md`, check the entry against the points below.
+         - If the change is visible to users (a fix, a new or changed flag, environment variable or behaviour, or an
+           update to Go or a Go module), recommend adding one.
+         - If it only changes tests, CI or documentation, don't.
+      2. Suggest the entry as a change to `CHANGELOG.md`: one bullet in the style of the existing ones. It starts with
+         what changed (Add, Fix, Change, Update, Remove), says what users see or have to do, and ends with
+         `See <the merge request's full URL>.`, never a short reference such as `!123`.
+      3. Where the entry goes:
+         - If the newest section's version isn't tagged yet, the bullet goes in that section.
+         - If it's already tagged, suggest a new `## v0.16.2-gitlab.<N+1>` section above it, where `N` comes from the
+           newest section, and the matching change to `Version` in `version/version.go`.
+         - Never suggest editing a section that's already tagged. The `release check` job fails that.

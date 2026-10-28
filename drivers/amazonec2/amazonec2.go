@@ -735,10 +735,13 @@ func (d *Driver) innerCreate() error {
 	}
 	if d.RequestSpotInstance {
 		req.InstanceMarketOptions = &ec2.InstanceMarketOptionsRequest{
-			MarketType: aws.String("spot"),
-			SpotOptions: &ec2.SpotMarketOptions{
-				MaxPrice: &d.SpotPrice,
-			},
+			MarketType:  aws.String("spot"),
+			SpotOptions: &ec2.SpotMarketOptions{},
+		}
+		// RunInstances refuses an empty MaxPrice, so an empty spot price
+		// sends none and leaves the maximum price to AWS.
+		if d.SpotPrice != "" {
+			req.InstanceMarketOptions.SpotOptions.MaxPrice = &d.SpotPrice
 		}
 		if d.BlockDurationMinutes != 0 {
 			req.InstanceMarketOptions.SpotOptions.BlockDurationMinutes = &d.BlockDurationMinutes

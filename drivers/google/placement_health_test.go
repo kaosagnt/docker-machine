@@ -501,6 +501,23 @@ func TestPlacementHealthClassUsesEffectiveConfiguration(t *testing.T) {
 	assert.False(t, samePlacementClass(class, health.selectionClass(d, selection)))
 }
 
+func TestPlacementHealthClassUsesSelectionRegionAndZones(t *testing.T) {
+	health, d, _ := newTestPlacementHealth(t)
+	d.Region = "us-east1"
+	d.LocationZones = []string{"us-east1-b", "us-east1-c"}
+	home := health.selectionClass(d, flexSelection{MachineType: "n2d-standard-2"})
+	assert.Equal(t, "us-east1", home.Region)
+	assert.Equal(t, []string{"us-east1-b", "us-east1-c"}, home.Zones)
+
+	away := health.selectionClass(d, flexSelection{MachineType: "n2d-standard-2", Region: "us-east4", Zones: []string{"us-east4-b", "us-east4-a"}})
+	assert.Equal(t, "us-east4", away.Region)
+	assert.Equal(t, []string{"us-east4-a", "us-east4-b"}, away.Zones)
+	assert.False(t, samePlacementClass(home, away))
+
+	anyZone := health.selectionClass(d, flexSelection{MachineType: "n2d-standard-2", Region: "us-east4"})
+	assert.Empty(t, anyZone.Zones, "a selection in another region does not inherit the driver zones")
+}
+
 func TestPlacementHealthUnavailableStoreDoesNotWriteState(t *testing.T) {
 	d := &Driver{FlexStockoutCooldown: time.Minute}
 	health := newPlacementHealth(d, time.Now)
