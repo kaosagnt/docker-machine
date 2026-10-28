@@ -1,4 +1,4 @@
-FROM golang:1.26.8
+FROM golang:1.26.10
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
