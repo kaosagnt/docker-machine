@@ -1,6 +1,6 @@
 # AGENTS.md
 
-GitLab's fork of Docker Machine. GitLab Runner's docker+machine executor uses it to create the machines that run jobs.
+Toolbox2Docker's fork of GitLab's fork of Docker Machine. Toolbox2Docker uses docker+machine as part of it's toolset.
 
 ## Changelog
 
