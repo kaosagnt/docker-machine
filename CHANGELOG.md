@@ -6,6 +6,8 @@ GitLab's fork of Docker Machine. Each `## v<version>` section is a release, newe
 
 - Fix `--amazonec2-request-spot-instance` with an empty `--amazonec2-spot-price=` failing every create with `InvalidParameterValue: The value '' is invalid for parameter MaxPrice`. An empty spot price now sends no maximum price, and AWS charges the current Spot price. A configured price, and the `0.50` default, are sent as before. See https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/merge_requests/201.
 
+- Update `golang.org/x/net` to v0.60.0, `golang.org/x/crypto` to v0.57.0, `golang.org/x/text` to v0.42.0 and `google.golang.org/grpc` to v1.83.2, from v0.55.0, v0.52.0, v0.37.0 and v1.80.0. This fixes known vulnerabilities reported against the `docker-machine` binary bundled in the GitLab Runner images: CVE-2026-46600, CVE-2026-78659, CVE-2026-78660, CVE-2026-78663, CVE-2026-78669 and CVE-2026-97032 in `x/net`; CVE-2026-56854, CVE-2026-56855 and CVE-2026-78662 in `x/crypto`; CVE-2026-56851 and CVE-2026-56852 in `x/text`; and CVE-2026-84303, CVE-2026-84304 and CVE-2026-84445 in `grpc`. See MR_LINK_PLACEHOLDER.
+
 ## v0.16.2-gitlab.64
 
 - Update Go to 1.27.3, from 1.27.2. This fixes security issues in `crypto/x509`: see https://go.dev/doc/devel/release#go1.27.3. See https://gitlab.com/gitlab-org/ci-cd/docker-machine/-/merge_requests/210.
